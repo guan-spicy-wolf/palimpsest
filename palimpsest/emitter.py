@@ -53,16 +53,23 @@ class EventEmitter:
             logger.warning(f"Failed to emit event {event_type}: {exc}")
             return None
 
-    def recent_events(self, limit: int = 10) -> list[dict]:
-        """Get recent events from this source."""
+    def recent_events(
+        self, limit: int = 10, *, job_id: str | None = None
+    ) -> list[dict]:
+        """Get recent events from this source, optionally scoped to a job."""
         if self._noop:
             return []
 
+        params: dict = {
+            "source": self._config.source_id,
+            "limit": limit,
+            "order": "desc",
+        }
+        if job_id:
+            params["job_id"] = job_id
+
         try:
-            response = self._client.get(
-                "/events",
-                params={"source": self._config.source_id, "limit": limit, "order": "desc"},
-            )
+            response = self._client.get("/events", params=params)
             response.raise_for_status()
             return response.json()
         except Exception as exc:

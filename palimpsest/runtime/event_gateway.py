@@ -4,25 +4,23 @@ The gateway automatically captures Runtime-level events (LLM calls, tool
 executions, job lifecycle) without the Agent's knowledge.  Business-level
 events (like spawn requests) flow through stable Tool interfaces.
 
-The Agent code never directly touches the event emission mechanism.
+All event emission MUST go through this gateway.  No code outside the
+gateway is allowed to access the underlying ``EventEmitter`` directly.
 """
 
 from __future__ import annotations
 
 from palimpsest.emitter import EventEmitter
 from palimpsest.events import (
-    EVENT_TYPES,
     JobCompletedData,
     JobFailedData,
     JobStartedData,
     LLMRequestData,
     LLMResponseData,
+    StageTransitionData,
     ToolExecData,
     ToolResultData,
-    VersionAdvancedData,
-    VersionRolledBackData,
 )
-from pydantic import BaseModel
 
 
 class EventGateway:
@@ -60,18 +58,23 @@ class EventGateway:
     def emit_job_failed(self, data: JobFailedData) -> None:
         self._emitter.emit(data)
 
-    # -- Version management events --
+    def emit_stage_transition(
+        self, job_id: str, from_stage: str, to_stage: str
+    ) -> None:
+        """Emit a stage transition event through the gateway."""
+        self._emitter.emit(
+            StageTransitionData(
+                job_id=job_id, from_stage=from_stage, to_stage=to_stage
+            )
+        )
 
-    def emit_version_advanced(self, data: VersionAdvancedData) -> None:
-        self._emitter.emit(data)
+    # -- Context queries (read-only, scoped to a specific job) --
 
-    def emit_version_rolled_back(self, data: VersionRolledBackData) -> None:
-        self._emitter.emit(data)
-
-    # -- Context queries (read-only access for context building) --
-
-    def recent_events(self, limit: int = 10) -> list[dict]:
-        return self._emitter.recent_events(limit)
+    def recent_events(
+        self, limit: int = 10, *, job_id: str | None = None
+    ) -> list[dict]:
+        """Return recent events, optionally filtered by job_id."""
+        return self._emitter.recent_events(limit, job_id=job_id)
 
     def close(self) -> None:
         self._emitter.close()

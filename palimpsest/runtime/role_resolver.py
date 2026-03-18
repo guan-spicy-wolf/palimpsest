@@ -1,6 +1,11 @@
 """Role resolver — reads Role definitions from the evolvable repository.
 
-A Role is a named combination of Prompt, Context template, and Tool set.
+A Role is a convenience template used only at the plan/spawn stage.
+``RoleResolver.resolve()`` expands a role name into a ``JobSpec`` — the
+flat, self-contained execution configuration that the runtime consumes.
+After expansion the role name is no longer needed; the runtime operates
+solely on the ``JobSpec``.
+
 Roles support single-level inheritance via the ``inherits`` field.
 """
 
@@ -13,24 +18,33 @@ import yaml
 
 
 @dataclass
-class ResolvedRole:
-    """Fully resolved role ready for injection into the Runtime sandbox."""
+class JobSpec:
+    """Fully resolved execution specification consumed by the runtime.
 
-    name: str
+    This is the *only* object ``run_job()`` depends on at execution time.
+    It is produced by expanding a Role template (or constructed directly
+    when a caller supplies a complete configuration without using roles).
+    """
+
     prompt: str
     context_template: dict
     builtin_tools: list[str]
     custom_tools: list[dict]
+    source_role: str = ""  # informational only; not used at execution time
+
+
+# Backwards-compatible alias — will be removed in a future release.
+ResolvedRole = JobSpec
 
 
 class RoleResolver:
-    """Resolves Role definitions from a checked-out evolvable repository."""
+    """Expands Role templates from a checked-out evolvable repository into JobSpecs."""
 
     def __init__(self, evo_root: str | Path):
         self._root = Path(evo_root)
 
-    def resolve(self, role_name: str) -> ResolvedRole:
-        """Load and resolve a role by name, handling inheritance."""
+    def resolve(self, role_name: str) -> JobSpec:
+        """Expand a role template into a flat JobSpec."""
         role_data = self._load_role(role_name)
 
         # Handle single-level inheritance
@@ -45,12 +59,12 @@ class RoleResolver:
         builtin_tools = tools.get("builtin", [])
         custom_tools = [self._load_yaml(f"tools/{t}.yaml") for t in tools.get("custom", [])]
 
-        return ResolvedRole(
-            name=role_data["name"],
+        return JobSpec(
             prompt=prompt_text,
             context_template=context_template,
             builtin_tools=builtin_tools,
             custom_tools=custom_tools,
+            source_role=role_data.get("name", role_name),
         )
 
     def list_roles(self) -> list[str]:
