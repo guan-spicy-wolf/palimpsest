@@ -1,0 +1,22 @@
+# Example job configuration
+# Run with: palimpsest run examples/hello-world.yaml
+
+task: |
+  Create a simple Python script that prints 'Hello, Palimpsest!'
+  Save it as hello.py in the workspace root.
+
+role: default
+
+workspace:
+  repo: ""  # Empty repo, will be initialized
+  branch: main
+  depth: 1
+
+llm:
+  model: claude-sonnet-4-6
+  temperature: 0.0
+  max_iterations: 20
+
+publication:
+  strategy: branch
+  branch_prefix: palimpsest/job

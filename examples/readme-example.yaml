@@ -1,0 +1,18 @@
+# Example: Read and summarize a file
+
+task: |
+  Read the README.md file and provide a summary of the project.
+
+role: default
+
+workspace:
+  repo: "https://github.com/your-repo.git"  # Replace with actual repo
+  branch: main
+
+llm:
+  model: claude-sonnet-4-6
+  temperature: 0.0
+
+publication:
+  strategy: branch
+  branch_prefix: palimpsest/job

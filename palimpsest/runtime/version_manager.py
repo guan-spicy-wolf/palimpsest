@@ -60,7 +60,7 @@ class VersionManager:
             return None
 
         try:
-            remote_sha = self._repo.remotes.origin.refs["master"].commit.hexsha
+            remote_sha = self._repo.remotes.origin.refs["main"].commit.hexsha
         except (IndexError, KeyError):
             return None
 
