@@ -1,3 +1,10 @@
+"""Built-in tool gateway — executes tools within the Runtime sandbox.
+
+Part of the Runtime (skeleton).  Tool execution events are captured
+transparently through the EventGateway.  The Agent only sees tool
+results, never the event emission.
+"""
+
 from __future__ import annotations
 
 import os
@@ -10,8 +17,8 @@ from pathlib import Path
 from loguru import logger
 
 from palimpsest.config import ToolsConfig
-from palimpsest.emitter import EventEmitter
 from palimpsest.events import ToolExecData, ToolResultData
+from palimpsest.runtime.event_gateway import EventGateway
 
 
 @dataclass
@@ -120,18 +127,22 @@ TOOL_SCHEMAS = [
 
 
 class BuiltinToolGateway(ToolGateway):
-    """Built-in tools: bash, read_file, write_file, list_files, task_complete."""
+    """Built-in tools: bash, read_file, write_file, list_files, task_complete.
 
-    def __init__(self, config: ToolsConfig, emitter: EventEmitter, job_id: str):
+    Event emission is transparent — the Agent only receives ToolResult objects.
+    """
+
+    def __init__(self, config: ToolsConfig, gateway: EventGateway, job_id: str):
         self._config = config
-        self._emitter = emitter
+        self._gateway = gateway
         self._job_id = job_id
 
     def schema(self) -> list[dict]:
         return TOOL_SCHEMAS
 
     def execute(self, name: str, call_id: str, args: dict, workspace: str) -> ToolResult:
-        self._emitter.emit(
+        # Transparent event: tool execution start
+        self._gateway.emit_tool_exec(
             ToolExecData(
                 job_id=self._job_id,
                 tool_name=name,
@@ -144,7 +155,8 @@ class BuiltinToolGateway(ToolGateway):
         result = self._dispatch(name, args, workspace)
         duration_ms = (time.monotonic_ns() - start) // 1_000_000
 
-        self._emitter.emit(
+        # Transparent event: tool execution result
+        self._gateway.emit_tool_result(
             ToolResultData(
                 job_id=self._job_id,
                 tool_name=name,

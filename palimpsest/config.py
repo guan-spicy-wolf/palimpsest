@@ -14,9 +14,11 @@ class WorkspaceConfig:
 
 
 @dataclass
-class ContextConfig:
-    system_prompt: str = "default"
-    recent_events: int = 10
+class EvolvableRepoConfig:
+    """Configuration for the evolvable repository (submodule)."""
+
+    path: str = "evo"
+    auto_update: bool = True
 
 
 @dataclass
@@ -49,8 +51,9 @@ class EventStoreConfig:
 @dataclass
 class JobConfig:
     task: str = ""
+    role: str = "default"
     workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
-    context: ContextConfig = field(default_factory=ContextConfig)
+    evolvable: EvolvableRepoConfig = field(default_factory=EvolvableRepoConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     publication: PublicationConfig = field(default_factory=PublicationConfig)
@@ -63,8 +66,9 @@ class JobConfig:
 
         return cls(
             task=data.get("task", ""),
+            role=data.get("role", "default"),
             workspace=WorkspaceConfig(**data.get("workspace", {})),
-            context=ContextConfig(**data.get("context", {})),
+            evolvable=EvolvableRepoConfig(**data.get("evolvable", {})),
             llm=LLMConfig(**data.get("llm", {})),
             tools=ToolsConfig(**data.get("tools", {})),
             publication=PublicationConfig(**data.get("publication", {})),
