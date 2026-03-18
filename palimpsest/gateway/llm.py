@@ -46,8 +46,13 @@ class LLMGateway(ABC):
         pass
 
 
+# Maximum retries for transient LLM errors (rate limits, network failures)
+_MAX_LLM_RETRIES = 3
+_LLM_RETRY_BASE_DELAY = 2  # seconds, exponential backoff: 2, 4, 8
+
+
 class LiteLLMGateway(LLMGateway):
-    """LLM gateway using litellm with transparent event capture."""
+    """LLM gateway using litellm with transparent event capture and retry."""
 
     def __init__(self, config: LLMConfig, gateway: EventGateway, job_id: str):
         self._config = config
@@ -84,11 +89,7 @@ class LiteLLMGateway(LLMGateway):
             kwargs["api_base"] = self._config.api_base
 
         start = time.monotonic_ns()
-        try:
-            response = litellm.completion(**kwargs)
-        except Exception as exc:
-            logger.error(f"LLM call failed: {exc}")
-            raise
+        response = self._call_with_retry(kwargs)
 
         duration_ms = (time.monotonic_ns() - start) // 1_000_000
 
@@ -131,3 +132,47 @@ class LiteLLMGateway(LLMGateway):
             output_tokens=getattr(response.usage, "completion_tokens", 0) or 0,
             raw_message=raw_message,
         )
+
+    def _call_with_retry(self, kwargs: dict):
+        """Call litellm.completion with exponential backoff on transient errors."""
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_LLM_RETRIES + 1):
+            try:
+                return litellm.completion(**kwargs)
+            except litellm.RateLimitError as exc:
+                last_exc = exc
+                if attempt == _MAX_LLM_RETRIES:
+                    break
+                delay = _LLM_RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    f"Rate limited (attempt {attempt + 1}/{_MAX_LLM_RETRIES + 1}), "
+                    f"retrying in {delay}s"
+                )
+                time.sleep(delay)
+            except litellm.APIConnectionError as exc:
+                last_exc = exc
+                if attempt == _MAX_LLM_RETRIES:
+                    break
+                delay = _LLM_RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    f"Connection error (attempt {attempt + 1}/{_MAX_LLM_RETRIES + 1}), "
+                    f"retrying in {delay}s: {exc}"
+                )
+                time.sleep(delay)
+            except litellm.ServiceUnavailableError as exc:
+                last_exc = exc
+                if attempt == _MAX_LLM_RETRIES:
+                    break
+                delay = _LLM_RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    f"Service unavailable (attempt {attempt + 1}/{_MAX_LLM_RETRIES + 1}), "
+                    f"retrying in {delay}s"
+                )
+                time.sleep(delay)
+            except Exception as exc:
+                # Non-retryable errors (auth, bad request, etc.)
+                logger.error(f"LLM call failed (non-retryable): {exc}")
+                raise
+
+        logger.error(f"LLM call failed after {_MAX_LLM_RETRIES + 1} attempts: {last_exc}")
+        raise last_exc
