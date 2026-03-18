@@ -1,7 +1,7 @@
 [project]
 name = "palimpsest"
-version = "0.1.0"
-description = "Self-evolving autonomous agent for software engineering tasks"
+version = "0.2.0"
+description = "Self-evolving agent system with separated Runtime (skeleton) and evolvable repository (muscle)"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [

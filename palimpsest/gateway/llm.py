@@ -1,3 +1,9 @@
+"""LLM gateway — manages communication with the language model.
+
+Part of the Runtime (skeleton).  Event emission is handled transparently
+through the EventGateway; the Agent never sees these events being sent.
+"""
+
 from __future__ import annotations
 
 import json
@@ -11,8 +17,8 @@ import litellm
 from loguru import logger
 
 from palimpsest.config import LLMConfig
-from palimpsest.emitter import EventEmitter
 from palimpsest.events import LLMRequestData, LLMResponseData
+from palimpsest.runtime.event_gateway import EventGateway
 
 
 @dataclass
@@ -41,11 +47,11 @@ class LLMGateway(ABC):
 
 
 class LiteLLMGateway(LLMGateway):
-    """LLM gateway using litellm."""
+    """LLM gateway using litellm with transparent event capture."""
 
-    def __init__(self, config: LLMConfig, emitter: EventEmitter, job_id: str):
+    def __init__(self, config: LLMConfig, gateway: EventGateway, job_id: str):
         self._config = config
-        self._emitter = emitter
+        self._gateway = gateway
         self._job_id = job_id
         self._iteration = 0
         self._api_key = os.environ.get(config.api_key_env, "")
@@ -53,7 +59,8 @@ class LiteLLMGateway(LLMGateway):
     def call(self, messages: list[dict], tools_schema: list[dict]) -> LLMResponse:
         self._iteration += 1
 
-        self._emitter.emit(
+        # Transparent event: LLM request
+        self._gateway.emit_llm_request(
             LLMRequestData(
                 job_id=self._job_id,
                 model=self._config.model,
@@ -88,7 +95,8 @@ class LiteLLMGateway(LLMGateway):
         choice = response.choices[0]
         msg = choice.message
 
-        self._emitter.emit(
+        # Transparent event: LLM response
+        self._gateway.emit_llm_response(
             LLMResponseData(
                 job_id=self._job_id,
                 model=self._config.model,

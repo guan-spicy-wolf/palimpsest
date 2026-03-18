@@ -1,0 +1,3 @@
+[submodule "evo"]
+	path = evo
+	url = /home/user/palimpsest-evo-bare
