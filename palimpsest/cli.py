@@ -45,12 +45,14 @@ def list_roles_cmd(evo_path: str):
 @main.command("version")
 @click.option("--evo-path", default="evo", help="Path to evolvable repository")
 def show_version(evo_path: str):
-    """Show the active commit of the evolvable repository."""
-    from palimpsest.runtime import VersionManager
+    """Show the current checkout SHA of the evolvable repository."""
+    from palimpsest.runtime.version_manager import read_evo_sha
 
-    mgr = VersionManager(evo_path)
-    click.echo(f"Active commit: {mgr.active_sha}")
-    click.echo(f"Last known good: {mgr.last_known_good}")
+    sha = read_evo_sha(evo_path)
+    if sha:
+        click.echo(f"Current checkout: {sha}")
+    else:
+        click.echo("Could not read evolvable repo HEAD")
 
 
 if __name__ == "__main__":

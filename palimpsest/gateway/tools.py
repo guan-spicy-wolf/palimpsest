@@ -382,8 +382,16 @@ class BuiltinToolGateway(ToolGateway):
 
 
 def _safe_path(workspace: str, rel_path: str) -> str:
-    """Prevent path traversal."""
-    abs_path = os.path.realpath(os.path.join(workspace, rel_path))
-    if not abs_path.startswith(os.path.realpath(workspace)):
+    """Prevent path traversal using strict path containment.
+
+    Uses ``Path.relative_to()`` instead of string-prefix comparison to
+    avoid adjacent-directory bypass (e.g. ``/workspace-evil`` matching
+    ``/workspace``).
+    """
+    real_workspace = Path(os.path.realpath(workspace))
+    abs_path = Path(os.path.realpath(os.path.join(workspace, rel_path)))
+    try:
+        abs_path.relative_to(real_workspace)
+    except ValueError:
         raise ValueError(f"Path traversal attempt: {rel_path}")
-    return abs_path
+    return str(abs_path)

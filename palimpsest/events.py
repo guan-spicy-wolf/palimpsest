@@ -54,18 +54,6 @@ class JobFailedData(BaseModel):
     traceback: str | None = None
 
 
-class VersionAdvancedData(BaseModel):
-    old_sha: str
-    new_sha: str
-    changed_files: list[str]
-
-
-class VersionRolledBackData(BaseModel):
-    old_sha: str
-    new_sha: str
-    changed_files: list[str]
-
-
 class StageTransitionData(BaseModel):
     job_id: str
     from_stage: str
@@ -80,7 +68,5 @@ EVENT_TYPES: dict[type, str] = {
     JobStartedData: "job.started",
     JobCompletedData: "job.completed",
     JobFailedData: "job.failed",
-    VersionAdvancedData: "runtime.version.advanced",
-    VersionRolledBackData: "runtime.version.rolled_back",
     StageTransitionData: "job.stage.transition",
 }
