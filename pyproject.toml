@@ -22,3 +22,8 @@ package = true
 
 [tool.setuptools.packages.find]
 include = ["palimpsest*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
