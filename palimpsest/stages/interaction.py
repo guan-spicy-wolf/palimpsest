@@ -39,6 +39,10 @@ def run_interaction_loop(
             result = tools.execute(tc.name, tc.id, tc.arguments, workspace_path)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result.output})
 
+            if result.terminal:
+                logger.info("Runtime received terminal signal from tool")
+                return {"status": "success", "summary": result.output[:500]}
+
     logger.warning(f"Stopped after {max_iterations} iterations")
     return {"status": "partial", "summary": f"Stopped after {max_iterations} iterations"}
 

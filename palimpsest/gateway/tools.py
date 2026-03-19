@@ -32,6 +32,7 @@ SpawnCallback = Callable[..., list[dict]]
 class ToolResult:
     success: bool
     output: str
+    terminal: bool = False
 
 
 class ToolGateway(ABC):
