@@ -11,14 +11,9 @@ class WorkspaceConfig:
     repo: str = ""
     branch: str = "main"
     depth: int = 1
+    git_token_env: str = ""
 
 
-@dataclass
-class EvolvableRepoConfig:
-    """Configuration for the evolvable repository (submodule)."""
-
-    path: str = "evo"
-    auto_update: bool = True
 
 
 @dataclass
@@ -33,6 +28,7 @@ class LLMConfig:
 @dataclass
 class ToolsConfig:
     builtin: dict[str, dict] = field(default_factory=dict)
+    disabled_builtins: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -53,7 +49,6 @@ class JobConfig:
     task: str = ""
     role: str = "default"
     workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
-    evolvable: EvolvableRepoConfig = field(default_factory=EvolvableRepoConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     publication: PublicationConfig = field(default_factory=PublicationConfig)
@@ -68,7 +63,6 @@ class JobConfig:
             task=data.get("task", ""),
             role=data.get("role", "default"),
             workspace=WorkspaceConfig(**data.get("workspace", {})),
-            evolvable=EvolvableRepoConfig(**data.get("evolvable", {})),
             llm=LLMConfig(**data.get("llm", {})),
             tools=ToolsConfig(**data.get("tools", {})),
             publication=PublicationConfig(**data.get("publication", {})),

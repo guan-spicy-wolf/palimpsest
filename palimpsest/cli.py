@@ -45,7 +45,7 @@ def list_roles_cmd(evo_path: str):
 @main.command("version")
 @click.option("--evo-path", default="evo", help="Path to evolvable repository")
 def show_version(evo_path: str):
-    """Show the current checkout SHA of the evolvable repository."""
+    """Show the current checkout SHA of the evolvable repository (read-only, no version tracking)."""
     from palimpsest.runtime.version_manager import read_evo_sha
 
     sha = read_evo_sha(evo_path)

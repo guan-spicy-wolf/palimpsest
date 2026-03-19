@@ -1,0 +1,31 @@
+task: "A simple smoke test task: increase version by 0.0.1"
+role: "default"
+
+workspace:
+  repo: "https://github.com/morrejssc-hub/palimpsest-test.git"
+  branch: "main"
+  depth: 1
+  git_token_env: "GITHUB_TOKEN"
+
+llm:
+  model: "openai/kimi-k2.5"
+  api_base: "https://coding.dashscope.aliyuncs.com/v1"
+  api_key_env: "OPENAI_API_KEY"
+  max_iterations: 20
+  temperature: 1.0
+
+tools:
+  builtin:
+    bash:
+      timeout: 60
+      output_limit: 4096
+  # disabled_builtins: ["spawn"]  # Uncomment to disable specific runtime builtins
+
+publication:
+  strategy: "branch"
+  branch_prefix: "palimpsest/job"
+
+eventstore:
+  url: ""
+  api_key_env: ""
+  source_id: "palimpsest-agent"

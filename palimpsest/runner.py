@@ -32,9 +32,10 @@ from palimpsest.events import (
     JobStartedData,
 )
 from palimpsest.gateway import BuiltinToolGateway, LiteLLMGateway
+from palimpsest.gateway.tool_loader import EvoToolLoader
+from palimpsest.gateway.tools import CompositeToolGateway
 from palimpsest.runtime import (
     EventGateway,
-    PermissionLayer,
     RoleResolver,
 )
 from palimpsest.runtime.role_resolver import JobSpec
@@ -45,13 +46,15 @@ from palimpsest.stages import (
     setup_workspace,
 )
 
+# The evolvable repo is always located at <project_root>/evo.
+# This is a structural constant, not a per-job configuration.
+_EVO_DIR = "evo"
+
 
 def run_job(config: JobConfig) -> None:
     """Resolve the role into a JobSpec and execute the four-stage pipeline."""
-    # Resolve the evolvable repo path
-    evo_path = Path(config.evolvable.path)
-    if not evo_path.is_absolute():
-        evo_path = Path.cwd() / evo_path
+    # Resolve the evolvable repo path (hardcoded structural constant)
+    evo_path = Path.cwd() / _EVO_DIR
 
     # Expand the role template into a flat JobSpec — this is the only
     # place where the role name is used.  Everything downstream depends
@@ -61,7 +64,7 @@ def run_job(config: JobConfig) -> None:
 
     logger.info(
         f"Resolved role '{config.role}' -> JobSpec "
-        f"(source_role={spec.source_role!r})"
+        f"(source_role={spec.source_role!r}, tools={spec.tools})"
     )
 
     _run_job_from_spec(config, spec, evo_path)
@@ -82,12 +85,7 @@ def _run_job_from_spec(
     gateway = EventGateway(emitter)
 
     # Read current checkout SHA for informational logging only.
-    # No version advancement or rollback — evo is treated as a plain
-    # git repo / submodule whose checkout is managed externally.
     _log_evo_checkout(evo_path)
-
-    # Initialise permission layer for the evolvable repo
-    permissions = PermissionLayer(evo_path)
 
     logger.info(f"Starting job {job_id}")
 
@@ -119,13 +117,21 @@ def _run_job_from_spec(
         # Build spawn callback for child task orchestration
         spawn_cb = _make_spawn_callback(config, evo_path)
 
-        tools = BuiltinToolGateway(
+        # Compose tool gateways: runtime builtins + evo YAML tools
+        builtin_tools = BuiltinToolGateway(
             config.tools,
             gateway,
             job_id,
-            permissions=permissions,
             spawn_callback=spawn_cb,
         )
+        evo_tools = EvoToolLoader(
+            evo_path,
+            spec.tools,
+            gateway,
+            job_id,
+        )
+        tools = CompositeToolGateway([builtin_tools, evo_tools])
+
         result = run_interaction_loop(
             job_id, context, workspace, llm, tools, config.llm.max_iterations
         )
@@ -183,7 +189,6 @@ def _make_spawn_callback(config: JobConfig, evo_path: Path):
         wait_for: str = "all_complete",
     ) -> list[dict]:
         from palimpsest.config import (
-            EvolvableRepoConfig,
             JobConfig as JC,
             WorkspaceConfig,
         )
@@ -197,8 +202,8 @@ def _make_spawn_callback(config: JobConfig, evo_path: Path):
                     repo=task_spec.get("repo", config.workspace.repo),
                     branch=config.workspace.branch,
                     depth=config.workspace.depth,
+                    git_token_env=config.workspace.git_token_env,
                 ),
-                evolvable=EvolvableRepoConfig(path=str(evo_path)),
                 llm=config.llm,
                 tools=config.tools,
                 publication=config.publication,

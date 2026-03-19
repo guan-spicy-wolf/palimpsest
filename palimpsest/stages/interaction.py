@@ -14,7 +14,12 @@ def run_interaction_loop(
     tools: ToolGateway,
     max_iterations: int,
 ) -> dict:
-    """Core agent loop. Returns {"status": str, "summary": str}."""
+    """Core agent loop. Returns {"status": str, "summary": str}.
+
+    Completion is determined by the runtime:
+      - LLM stops calling tools → success
+      - Max iterations reached → partial
+    """
     messages = [{"role": "user", "content": context["task"]}]
 
     for iteration in range(max_iterations):
@@ -34,9 +39,6 @@ def run_interaction_loop(
             result = tools.execute(tc.name, tc.id, tc.arguments, workspace_path)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result.output})
 
-            if result.is_terminal:
-                logger.info("Task marked as complete")
-                return result.terminal_data or {"status": "success", "summary": ""}
-
     logger.warning(f"Stopped after {max_iterations} iterations")
     return {"status": "partial", "summary": f"Stopped after {max_iterations} iterations"}
+

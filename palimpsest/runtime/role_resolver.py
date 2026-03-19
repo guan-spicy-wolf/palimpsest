@@ -21,20 +21,14 @@ import yaml
 class JobSpec:
     """Fully resolved execution specification consumed by the runtime.
 
-    This is the *only* object ``run_job()`` depends on at execution time.
-    It is produced by expanding a Role template (or constructed directly
-    when a caller supplies a complete configuration without using roles).
+    ``tools`` is a list of tool names to load from evo/tools/*.yaml.
+    Runtime builtins (bash, spawn) are always implicitly available.
     """
 
     prompt: str
     context_template: dict
-    builtin_tools: list[str]
-    custom_tools: list[dict]
+    tools: list[str] = field(default_factory=list)
     source_role: str = ""  # informational only; not used at execution time
-
-
-# Backwards-compatible alias — will be removed in a future release.
-ResolvedRole = JobSpec
 
 
 class RoleResolver:
@@ -55,15 +49,16 @@ class RoleResolver:
         prompt_text = self._load_file(role_data["prompt"])
         context_template = self._load_yaml(role_data.get("context", "contexts/default.yaml"))
 
-        tools = role_data.get("tools", {})
-        builtin_tools = tools.get("builtin", [])
-        custom_tools = [self._load_yaml(f"tools/{t}.yaml") for t in tools.get("custom", [])]
+        # Unified tool list — just names, loaded by YamlToolLoader at runtime
+        tools = role_data.get("tools", [])
+        if isinstance(tools, dict):
+            # Backwards compat: flatten old {builtin: [...], custom: [...]} format
+            tools = tools.get("custom", [])
 
         return JobSpec(
             prompt=prompt_text,
             context_template=context_template,
-            builtin_tools=builtin_tools,
-            custom_tools=custom_tools,
+            tools=tools,
             source_role=role_data.get("name", role_name),
         )
 
