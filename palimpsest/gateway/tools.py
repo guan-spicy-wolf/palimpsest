@@ -1,11 +1,12 @@
-"""Built-in tool gateway — runtime-embedded tools (bash, spawn).
+"""Built-in tool gateway — runtime-embedded tools.
 
 Part of the Runtime (skeleton).  Tool execution events are captured
 transparently through the EventGateway.
 
-Only ``bash`` and ``spawn`` are embedded in the runtime.  All other
-tools (read_file, write_file, list_files, …) are defined as YAML
-files in the evolvable repository and loaded by ``YamlToolLoader``.
+``bash`` is embedded in the runtime.  ``spawn`` emits a spawn-request
+event for the external Supervisor — the runtime does NOT execute child
+tasks itself.  All other tools are defined in the evolvable repository
+and loaded by the tool resolver.
 """
 
 from __future__ import annotations
@@ -18,14 +19,8 @@ from dataclasses import dataclass
 from loguru import logger
 
 from palimpsest.config import ToolsConfig
-from palimpsest.events import ToolExecData, ToolResultData
+from palimpsest.events import SpawnRequestData, ToolExecData, ToolResultData
 from palimpsest.runtime.event_gateway import EventGateway
-
-from typing import Callable
-
-# Type alias for the spawn callback injected by the Supervisor.
-# Signature: (parent_job_id, tasks, wait_for) -> list[dict]
-SpawnCallback = Callable[..., list[dict]]
 
 
 @dataclass
@@ -48,10 +43,7 @@ class ToolGateway(ABC):
 
 
 class CompositeToolGateway(ToolGateway):
-    """Composes multiple tool gateways into a single interface.
-
-    Schemas are merged from all sub-gateways.
-    """
+    """Composes multiple tool gateways into a single interface."""
 
     def __init__(self, gateways: list[ToolGateway]):
         self._gateways = gateways
@@ -108,9 +100,9 @@ BUILTIN_TOOL_SCHEMAS = {
         "function": {
             "name": "spawn",
             "description": (
-                "Spawn child tasks via Supervisor fork-join. Each child runs as "
-                "an independent Job with its own Role. The parent is suspended "
-                "until the wait condition is met."
+                "Request the Supervisor to spawn child tasks.  This emits a "
+                "spawn-request event; the Supervisor handles the actual "
+                "fork-join orchestration externally."
             ),
             "parameters": {
                 "type": "object",
@@ -150,15 +142,11 @@ BUILTIN_TOOL_SCHEMAS = {
 }
 
 
-# Maximum retries for transient tool failures (subprocess timeout, I/O errors)
-_MAX_TOOL_RETRIES = 2
-
-
 class BuiltinToolGateway(ToolGateway):
-    """Runtime-embedded tools (bash, spawn) with transparent event capture.
+    """Runtime-embedded tools with transparent event capture.
 
-    All other tools are loaded from evo via YamlToolLoader and composed
-    externally by the runner.
+    ``bash`` executes commands locally.  ``spawn`` emits a spawn-request
+    event — it does NOT run child tasks.
     """
 
     def __init__(
@@ -166,12 +154,10 @@ class BuiltinToolGateway(ToolGateway):
         config: ToolsConfig,
         gateway: EventGateway,
         job_id: str,
-        spawn_callback: SpawnCallback | None = None,
     ):
         self._config = config
         self._gateway = gateway
         self._job_id = job_id
-        self._spawn_callback = spawn_callback
         self._disabled = set(config.disabled_builtins)
 
     def schema(self) -> list[dict]:
@@ -184,7 +170,6 @@ class BuiltinToolGateway(ToolGateway):
         if name in self._disabled:
             return ToolResult(success=False, output=f"Tool '{name}' is disabled")
 
-        # Transparent event: tool execution start
         self._gateway.emit_tool_exec(
             ToolExecData(
                 job_id=self._job_id,
@@ -198,7 +183,6 @@ class BuiltinToolGateway(ToolGateway):
         result = self._dispatch(name, args, workspace)
         duration_ms = (time.monotonic_ns() - start) // 1_000_000
 
-        # Transparent event: tool execution result
         self._gateway.emit_tool_result(
             ToolResultData(
                 job_id=self._job_id,
@@ -217,7 +201,7 @@ class BuiltinToolGateway(ToolGateway):
             if name == "bash":
                 return self._bash(args, workspace)
             elif name == "spawn":
-                return self._spawn(args, workspace)
+                return self._spawn(args)
             else:
                 return ToolResult(success=False, output=f"Unknown builtin tool: {name}")
         except Exception as exc:
@@ -229,74 +213,41 @@ class BuiltinToolGateway(ToolGateway):
         timeout = cfg.get("timeout", 60)
         output_limit = cfg.get("output_limit", 4096)
 
-        # Retry logic for transient failures
-        max_attempts = _MAX_TOOL_RETRIES + 1
-        last_result: ToolResult | None = None
-
-        for attempt in range(max_attempts):
-            try:
-                result = subprocess.run(
-                    args["command"],
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    cwd=workspace,
-                    timeout=timeout,
-                )
-            except subprocess.TimeoutExpired:
-                last_result = ToolResult(success=False, output=f"Command timed out ({timeout}s)")
-                if attempt < max_attempts - 1:
-                    delay = 2 ** attempt
-                    logger.warning(f"bash timed out (attempt {attempt + 1}), retrying in {delay}s")
-                    time.sleep(delay)
-                    continue
-                return last_result
-
-            output = (result.stdout or "") + (result.stderr or "")
-            tool_result = ToolResult(success=result.returncode == 0, output=output[:output_limit])
-            if tool_result.success or attempt == max_attempts - 1:
-                return tool_result
-
-            last_result = tool_result
-            delay = 2 ** attempt
-            logger.warning(
-                f"bash failed (attempt {attempt + 1}/{max_attempts}), "
-                f"retrying in {delay}s: {tool_result.output[:120]}"
+        try:
+            result = subprocess.run(
+                args["command"],
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=workspace,
+                timeout=timeout,
             )
-            time.sleep(delay)
+        except subprocess.TimeoutExpired:
+            return ToolResult(success=False, output=f"Command timed out ({timeout}s)")
 
-        return last_result or ToolResult(success=False, output="Retry exhausted")
+        output = (result.stdout or "") + (result.stderr or "")
+        return ToolResult(success=result.returncode == 0, output=output[:output_limit])
 
-    def _spawn(self, args: dict, workspace: str) -> ToolResult:
-        """Spawn child tasks via the Supervisor callback."""
+    def _spawn(self, args: dict) -> ToolResult:
+        """Emit a spawn-request event. The Supervisor handles the rest."""
         tasks = args.get("tasks", [])
         if not tasks:
             return ToolResult(success=False, output="No tasks provided to spawn")
 
         wait_for = args.get("wait_for", "all_complete")
 
-        if self._spawn_callback is None:
-            return ToolResult(
-                success=False,
-                output="Spawn not available: no supervisor configured for this job",
-            )
-
-        try:
-            child_results = self._spawn_callback(
-                parent_job_id=self._job_id,
+        self._gateway.emit_spawn_request(
+            SpawnRequestData(
+                job_id=self._job_id,
                 tasks=tasks,
                 wait_for=wait_for,
             )
-            summaries = []
-            for i, cr in enumerate(child_results):
-                status = cr.get("status", "unknown")
-                summary = cr.get("summary", "")[:200]
-                summaries.append(f"  [{i+1}] {status}: {summary}")
+        )
 
-            return ToolResult(
-                success=all(cr.get("status") == "success" for cr in child_results),
-                output=f"Spawned {len(tasks)} child tasks ({wait_for}):\n" + "\n".join(summaries),
-            )
-        except Exception as exc:
-            logger.error(f"Spawn failed: {exc}")
-            return ToolResult(success=False, output=f"Spawn error: {exc}")
+        return ToolResult(
+            success=True,
+            output=(
+                f"Spawn request emitted for {len(tasks)} child task(s) "
+                f"(wait_for={wait_for}). The Supervisor will handle orchestration."
+            ),
+        )

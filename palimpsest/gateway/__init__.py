@@ -1,5 +1,5 @@
 from palimpsest.gateway.llm import LLMGateway, LiteLLMGateway, LLMResponse, ToolCall
-from palimpsest.gateway.tools import ToolGateway, BuiltinToolGateway, CompositeToolGateway, ToolResult, SpawnCallback
+from palimpsest.gateway.tools import ToolGateway, BuiltinToolGateway, CompositeToolGateway, ToolResult
 
 __all__ = [
     "LLMGateway",
@@ -10,6 +10,4 @@ __all__ = [
     "BuiltinToolGateway",
     "CompositeToolGateway",
     "ToolResult",
-    "SpawnCallback",
 ]
-

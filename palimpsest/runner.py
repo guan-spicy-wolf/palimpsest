@@ -124,16 +124,8 @@ def _run_job_from_spec(
         gateway.emit_stage_transition(job_id, "context", "interaction")
         llm = LiteLLMGateway(config.llm, gateway, job_id)
 
-        # Build spawn callback for child task orchestration
-        spawn_cb = _make_spawn_callback(config, evo_path)
-
-        # Compose tool gateways: runtime builtins + evo YAML tools
-        builtin_tools = BuiltinToolGateway(
-            config.tools,
-            gateway,
-            job_id,
-            spawn_callback=spawn_cb,
-        )
+        # Compose tool gateways: runtime builtins + evo tools
+        builtin_tools = BuiltinToolGateway(config.tools, gateway, job_id)
         evo_providers = resolve_tool_providers(evo_path, spec.tools)
         evo_tools = EvoToolGateway(evo_providers, gateway, job_id)
         duplicate_tools = find_duplicate_tool_names([builtin_tools, evo_tools])
@@ -252,50 +244,3 @@ def _log_evo_checkout(evo_path: Path) -> None:
         logger.info(f"Evolvable repo checkout: {repo.head.commit.hexsha[:8]}")
     except Exception:
         logger.debug("Could not read evolvable repo HEAD")
-
-
-def _make_spawn_callback(config: JobConfig, evo_path: Path):
-    """Create a spawn callback that runs child jobs inline.
-
-    In production this would delegate to a Supervisor service.  For now
-    child tasks are executed sequentially in-process, each with their
-    own job ID, workspace, and Role.
-    """
-
-    def spawn_callback(
-        parent_job_id: str,
-        tasks: list[dict],
-        wait_for: str = "all_complete",
-    ) -> list[dict]:
-        from palimpsest.config import (
-            JobConfig as JC,
-            WorkspaceConfig,
-        )
-
-        results: list[dict] = []
-        for task_spec in tasks:
-            child_config = JC(
-                task=task_spec["task"],
-                role=task_spec.get("role", "default"),
-                workspace=WorkspaceConfig(
-                    repo=task_spec.get("repo", config.workspace.repo),
-                    branch=config.workspace.branch,
-                    depth=config.workspace.depth,
-                    git_token_env=config.workspace.git_token_env,
-                ),
-                llm=config.llm,
-                tools=config.tools,
-                publication=config.publication,
-                eventstore=config.eventstore,
-            )
-            try:
-                run_job(child_config)
-                results.append({"status": "success", "summary": task_spec["task"]})
-            except Exception as exc:
-                results.append({"status": "failed", "summary": str(exc)[:200]})
-                if wait_for == "any_failed":
-                    break
-
-        return results
-
-    return spawn_callback

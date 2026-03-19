@@ -18,6 +18,7 @@ from palimpsest.events import (
     LLMRequestData,
     LLMResponseData,
     RuntimeIssueData,
+    SpawnRequestData,
     StageTransitionData,
     ToolExecData,
     ToolResultData,
@@ -60,6 +61,9 @@ class EventGateway:
         self.__emitter.emit(data)
 
     def emit_runtime_issue(self, data: RuntimeIssueData) -> None:
+        self.__emitter.emit(data)
+
+    def emit_spawn_request(self, data: SpawnRequestData) -> None:
         self.__emitter.emit(data)
 
     def emit_stage_transition(

@@ -68,6 +68,18 @@ class StageTransitionData(BaseModel):
     to_stage: str
 
 
+class SpawnRequestData(BaseModel):
+    """Emitted when the agent requests child task orchestration.
+
+    The runtime does NOT execute child tasks.  It publishes this event
+    so that the external Supervisor can pick it up and handle fork-join.
+    """
+
+    job_id: str
+    tasks: list[dict]
+    wait_for: str = "all_complete"
+
+
 EVENT_TYPES: dict[type, str] = {
     LLMRequestData: "agent.llm.request",
     LLMResponseData: "agent.llm.response",
@@ -78,4 +90,5 @@ EVENT_TYPES: dict[type, str] = {
     JobFailedData: "job.failed",
     RuntimeIssueData: "job.runtime.issue",
     StageTransitionData: "job.stage.transition",
+    SpawnRequestData: "job.spawn.request",
 }
