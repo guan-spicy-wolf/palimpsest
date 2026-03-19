@@ -1,58 +1,81 @@
 """Stage 2: Context building from the resolved JobSpec.
 
 Assembles the LLM context window using the JobSpec's system prompt and
-a registry of ``ContextProvider`` implementations.  Each section type
-declared in the context template is handled by its corresponding
-provider — no hard-coded ``if/elif`` branches.
-
-The Agent can still query additional events during the interaction loop;
-those extra queries are recorded by the transparent event gateway as
-evolution signals.
+a registry of ContextProvider implementations. Evo providers are
+loaded first; builtin fallbacks are used for section types not found in evo.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from loguru import logger
 
 from palimpsest.runtime.event_gateway import EventGateway
 from palimpsest.runtime.interfaces import ContextProvider
+from palimpsest.runtime.resolver import resolve_providers
 from palimpsest.runtime.role_resolver import JobSpec
 
 
 # ---------------------------------------------------------------------------
-# Built-in context providers
+# Evo context provider resolution
 # ---------------------------------------------------------------------------
 
-class FileTreeProvider(ContextProvider):
-    """Renders workspace file listing."""
+def resolve_context_providers(
+    evo_root: str | Path,
+    requested: list[str],
+) -> dict[str, ContextProvider]:
+    """Resolve context providers from evo/contexts/*.py."""
+    evo_root = Path(evo_root)
+    return resolve_providers(
+        scan_dir=evo_root / "contexts",
+        base_class=ContextProvider,
+        key_fn=lambda inst: [inst.section_type],
+        requested=requested,
+    )
 
+
+# ---------------------------------------------------------------------------
+# Built-in fallback context providers
+# ---------------------------------------------------------------------------
+
+class _FileTreeFallback(ContextProvider):
     @property
     def section_type(self) -> str:
         return "file_tree"
 
-    def render(self, job_id: str, workspace: str, section_config: dict) -> str:
+    def render(self, job_id, workspace, section_config, runtime_deps=None):
         max_files = section_config.get("max_files", 50)
-        excludes = section_config.get("exclude", [".git"])
-        file_tree = _list_files(workspace, max_files=max_files, exclude=excludes)
-        return f"## Workspace file tree\n```\n{file_tree}\n```"
+        excludes = set(section_config.get("exclude", [".git"]))
+        lines, count = [], 0
+        for dirpath, dirnames, filenames in os.walk(workspace):
+            dirnames[:] = [d for d in dirnames if d not in excludes]
+            rel_dir = os.path.relpath(dirpath, workspace)
+            prefix = "" if rel_dir == "." else rel_dir + "/"
+            for fname in filenames:
+                lines.append(prefix + fname)
+                count += 1
+                if count >= max_files:
+                    lines.append(f"... (truncated at {max_files} files)")
+                    tree = "\n".join(lines)
+                    return f"## Workspace file tree\n```\n{tree}\n```"
+        tree = "\n".join(lines) if lines else "(empty)"
+        return f"## Workspace file tree\n```\n{tree}\n```"
 
 
-class RecentEventsProvider(ContextProvider):
-    """Renders recent events scoped to the current job."""
-
-    def __init__(self, gateway: EventGateway):
-        self._gateway = gateway
-
+class _RecentEventsFallback(ContextProvider):
     @property
     def section_type(self) -> str:
         return "recent_events"
 
-    def render(self, job_id: str, workspace: str, section_config: dict) -> str:
+    def render(self, job_id, workspace, section_config, runtime_deps=None):
+        gateway = (runtime_deps or {}).get("gateway")
+        if not gateway:
+            return "## Recent events\n(event gateway not available)"
         limit = section_config.get("limit", 10)
         fmt = section_config.get("format", "- [{ts}] {type}")
-        recent = self._gateway.recent_events(limit, job_id=job_id)
+        recent = gateway.recent_events(limit, job_id=job_id)
         lines = []
         for e in recent:
             try:
@@ -67,44 +90,31 @@ class RecentEventsProvider(ContextProvider):
         return f"## Recent events\n{summary}"
 
 
-class TaskDescriptionProvider(ContextProvider):
-    """Renders the task description."""
-
-    def __init__(self, task: str):
-        self._task = task
-
+class _TaskDescriptionFallback(ContextProvider):
     @property
     def section_type(self) -> str:
         return "task_description"
 
-    def render(self, job_id: str, workspace: str, section_config: dict) -> str:
-        return f"## Task\n{self._task}"
+    def render(self, job_id, workspace, section_config, runtime_deps=None):
+        task = (runtime_deps or {}).get("task", "(no task provided)")
+        return f"## Task\n{task}"
 
 
-class VersionHistoryProvider(ContextProvider):
-    """Placeholder — version management is currently degraded."""
-
+class _VersionHistoryFallback(ContextProvider):
     @property
     def section_type(self) -> str:
         return "version_history"
 
-    def render(self, job_id: str, workspace: str, section_config: dict) -> str:
+    def render(self, job_id, workspace, section_config, runtime_deps=None):
         return "## Version history\n(reading current checkout only)"
 
 
-# ---------------------------------------------------------------------------
-# Provider registry
-# ---------------------------------------------------------------------------
-
-def _build_provider_registry(
-    task: str, gateway: EventGateway
-) -> dict[str, ContextProvider]:
-    """Create the default provider registry."""
-    providers: list[ContextProvider] = [
-        FileTreeProvider(),
-        RecentEventsProvider(gateway),
-        TaskDescriptionProvider(task),
-        VersionHistoryProvider(),
+def _build_fallback_registry() -> dict[str, ContextProvider]:
+    providers = [
+        _FileTreeFallback(),
+        _RecentEventsFallback(),
+        _TaskDescriptionFallback(),
+        _VersionHistoryFallback(),
     ]
     return {p.section_type: p for p in providers}
 
@@ -119,10 +129,21 @@ def build_context(
     task: str,
     spec: JobSpec,
     gateway: EventGateway,
+    evo_root: Path | None = None,
 ) -> dict:
     """Build LLM context from a resolved JobSpec. Returns {"system": str, "task": str}."""
     system_prompt = spec.prompt
-    registry = _build_provider_registry(task, gateway)
+
+    # Start with builtin fallbacks
+    registry = _build_fallback_registry()
+
+    # Override with evo providers where available
+    if evo_root:
+        section_types = [s.get("type", "") for s in spec.context_template.get("sections", [])]
+        evo_providers = resolve_context_providers(evo_root, section_types)
+        registry.update(evo_providers)
+
+    runtime_deps = {"gateway": gateway, "task": task}
 
     sections = spec.context_template.get("sections", [])
     parts: list[str] = []
@@ -130,33 +151,10 @@ def build_context(
         section_type = section.get("type", "")
         provider = registry.get(section_type)
         if provider:
-            parts.append(provider.render(job_id, workspace_path, section))
+            parts.append(provider.render(job_id, workspace_path, section, runtime_deps=runtime_deps))
         else:
             logger.warning(f"Unknown context section type: {section_type!r}")
 
     task_message = "\n\n".join(parts)
     logger.info(f"Built context for job {job_id}")
     return {"system": system_prompt, "task": task_message}
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _list_files(
-    root: str, max_files: int = 50, exclude: list[str] | None = None
-) -> str:
-    exclude = set(exclude or [".git"])
-    lines: list[str] = []
-    count = 0
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in exclude]
-        rel_dir = os.path.relpath(dirpath, root)
-        prefix = "" if rel_dir == "." else rel_dir + "/"
-        for fname in filenames:
-            lines.append(prefix + fname)
-            count += 1
-            if count >= max_files:
-                lines.append(f"... (truncated at {max_files} files)")
-                return "\n".join(lines)
-    return "\n".join(lines) if lines else "(empty)"

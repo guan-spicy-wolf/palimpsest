@@ -33,8 +33,18 @@ class ContextProvider(ABC):
         """The section type string this provider handles."""
 
     @abstractmethod
-    def render(self, job_id: str, workspace: str, section_config: dict) -> str:
-        """Return rendered markdown for this context section."""
+    def render(
+        self,
+        job_id: str,
+        workspace: str,
+        section_config: dict,
+        runtime_deps: dict | None = None,
+    ) -> str:
+        """Return rendered markdown for this context section.
+
+        runtime_deps carries runtime-injected dependencies (e.g.
+        EventGateway, task text). Keys are documented per provider.
+        """
 
 
 # ---------------------------------------------------------------------------

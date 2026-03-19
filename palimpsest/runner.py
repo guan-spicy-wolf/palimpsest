@@ -108,6 +108,7 @@ def _run_job_from_spec(
             config.task,
             spec,
             gateway,
+            evo_root=evo_path,
         )
 
         # Stage 3: Interaction
