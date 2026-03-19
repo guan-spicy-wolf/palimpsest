@@ -50,8 +50,7 @@ class ToolGateway(ABC):
 class CompositeToolGateway(ToolGateway):
     """Composes multiple tool gateways into a single interface.
 
-    Schemas are merged from all sub-gateways.  Execution dispatches to
-    the first gateway that recognises the tool name.
+    Schemas are merged from all sub-gateways.
     """
 
     def __init__(self, gateways: list[ToolGateway]):
@@ -59,7 +58,8 @@ class CompositeToolGateway(ToolGateway):
         self._dispatch: dict[str, ToolGateway] = {}
         for gw in gateways:
             for s in gw.schema():
-                self._dispatch[s["function"]["name"]] = gw
+                name = s["function"]["name"]
+                self._dispatch.setdefault(name, gw)
 
     def schema(self) -> list[dict]:
         schemas = []
@@ -72,6 +72,20 @@ class CompositeToolGateway(ToolGateway):
         if gw:
             return gw.execute(name, call_id, args, workspace)
         return ToolResult(success=False, output=f"Unknown tool: {name}")
+
+
+def find_duplicate_tool_names(gateways: list[ToolGateway]) -> list[str]:
+    """Return duplicate tool names across gateways."""
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for gw in gateways:
+        for schema in gw.schema():
+            name = schema["function"]["name"]
+            if name in seen:
+                duplicates.add(name)
+            else:
+                seen.add(name)
+    return sorted(duplicates)
 
 
 BUILTIN_TOOL_SCHEMAS = {

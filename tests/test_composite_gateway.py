@@ -1,5 +1,9 @@
 from unittest.mock import MagicMock
-from palimpsest.gateway.tools import CompositeToolGateway, ToolResult
+from palimpsest.gateway.tools import (
+    CompositeToolGateway,
+    ToolResult,
+    find_duplicate_tool_names,
+)
 
 
 def _make_gateway(names: list[str]) -> MagicMock:
@@ -34,3 +38,9 @@ def test_composite_unknown_tool():
     composite = CompositeToolGateway([_make_gateway(["a"])])
     result = composite.execute("nonexistent", "x", {}, "/tmp")
     assert not result.success
+
+
+def test_duplicate_tool_names_are_detected():
+    gw_a = _make_gateway(["a"])
+    gw_b = _make_gateway(["a"])
+    assert find_duplicate_tool_names([gw_a, gw_b]) == ["a"]

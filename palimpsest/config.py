@@ -35,6 +35,7 @@ class ToolsConfig:
 class PublicationConfig:
     strategy: str = "branch"
     branch_prefix: str = "palimpsest/job"
+    max_recovery_attempts: int = 1
 
 
 @dataclass

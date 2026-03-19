@@ -17,6 +17,7 @@ from palimpsest.events import (
     JobStartedData,
     LLMRequestData,
     LLMResponseData,
+    RuntimeIssueData,
     StageTransitionData,
     ToolExecData,
     ToolResultData,
@@ -56,6 +57,9 @@ class EventGateway:
         self.__emitter.emit(data)
 
     def emit_job_failed(self, data: JobFailedData) -> None:
+        self.__emitter.emit(data)
+
+    def emit_runtime_issue(self, data: RuntimeIssueData) -> None:
         self.__emitter.emit(data)
 
     def emit_stage_transition(

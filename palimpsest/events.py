@@ -54,6 +54,13 @@ class JobFailedData(BaseModel):
     traceback: str | None = None
 
 
+class RuntimeIssueData(BaseModel):
+    job_id: str
+    stage: str
+    message: str
+    fatal: bool = False
+
+
 class StageTransitionData(BaseModel):
     job_id: str
     from_stage: str
@@ -68,5 +75,6 @@ EVENT_TYPES: dict[type, str] = {
     JobStartedData: "job.started",
     JobCompletedData: "job.completed",
     JobFailedData: "job.failed",
+    RuntimeIssueData: "job.runtime.issue",
     StageTransitionData: "job.stage.transition",
 }

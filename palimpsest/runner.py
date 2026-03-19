@@ -22,6 +22,7 @@ import traceback
 import uuid
 from pathlib import Path
 
+import git
 from loguru import logger
 
 from palimpsest.config import JobConfig
@@ -30,10 +31,11 @@ from palimpsest.events import (
     JobCompletedData,
     JobFailedData,
     JobStartedData,
+    RuntimeIssueData,
 )
 from palimpsest.gateway import BuiltinToolGateway, LiteLLMGateway
 from palimpsest.gateway.tool_loader import resolve_tool_providers, EvoToolGateway
-from palimpsest.gateway.tools import CompositeToolGateway
+from palimpsest.gateway.tools import CompositeToolGateway, find_duplicate_tool_names
 from palimpsest.runtime import (
     EventGateway,
     RoleResolver,
@@ -41,6 +43,8 @@ from palimpsest.runtime import (
 from palimpsest.runtime.role_resolver import JobSpec
 from palimpsest.stages import (
     build_context,
+    finalize_workspace_after_job,
+    find_publication_issues,
     publish_results,
     run_interaction_loop,
     setup_workspace,
@@ -49,6 +53,10 @@ from palimpsest.stages import (
 # The evolvable repo is always located at <project_root>/evo.
 # This is a structural constant, not a per-job configuration.
 _EVO_DIR = "evo"
+
+
+class ControlledJobFailure(Exception):
+    """Runtime-detected job failure that should not produce a traceback."""
 
 
 def run_job(config: JobConfig) -> None:
@@ -89,10 +97,11 @@ def _run_job_from_spec(
 
     logger.info(f"Starting job {job_id}")
 
+    workspace: str | None = None
     try:
         # Stage 1: Workspace
         gateway.emit_job_started(
-            JobStartedData(job_id=job_id, workspace_path="(pending)")
+            JobStartedData(job_id=job_id, workspace_path="")
         )
         gateway.emit_stage_transition(job_id, "init", "workspace")
 
@@ -127,17 +136,70 @@ def _run_job_from_spec(
         )
         evo_providers = resolve_tool_providers(evo_path, spec.tools)
         evo_tools = EvoToolGateway(evo_providers, gateway, job_id)
+        duplicate_tools = find_duplicate_tool_names([builtin_tools, evo_tools])
+        if duplicate_tools:
+            message = "Duplicate tool names configured: " + ", ".join(duplicate_tools)
+            gateway.emit_runtime_issue(
+                RuntimeIssueData(
+                    job_id=job_id,
+                    stage="interaction",
+                    message=message,
+                    fatal=True,
+                )
+            )
+            raise ControlledJobFailure(message)
+
         tools = CompositeToolGateway([builtin_tools, evo_tools])
+        interaction_messages: list[dict] | None = None
+        publication_recovery_attempts = 0
+        pending_user_prompt: str | None = None
+        max_recovery_attempts = max(0, config.publication.max_recovery_attempts)
 
-        result = run_interaction_loop(
-            job_id, context, workspace, llm, tools, config.llm.max_iterations
-        )
+        while True:
+            result = run_interaction_loop(
+                job_id,
+                context,
+                workspace,
+                llm,
+                tools,
+                config.llm.max_iterations,
+                messages=interaction_messages,
+                user_prompt=pending_user_prompt,
+            )
+            interaction_messages = result["messages"]
+            pending_user_prompt = None
 
-        # Stage 4: Publication
-        gateway.emit_stage_transition(job_id, "interaction", "publication")
-        git_ref = publish_results(
-            job_id, result, workspace, config.publication
-        )
+            # Stage 4: Publication
+            gateway.emit_stage_transition(job_id, "interaction", "publication")
+            issues = find_publication_issues(git.Repo(workspace))
+            if issues:
+                message = "Publication guardrails triggered:\n- " + "\n- ".join(issues)
+                can_retry = publication_recovery_attempts < max_recovery_attempts
+                gateway.emit_runtime_issue(
+                    RuntimeIssueData(
+                        job_id=job_id,
+                        stage="publication",
+                        message=message,
+                        fatal=not can_retry,
+                    )
+                )
+                if not can_retry:
+                    raise ControlledJobFailure(message)
+
+                publication_recovery_attempts += 1
+                gateway.emit_stage_transition(job_id, "publication", "interaction")
+                pending_user_prompt = (
+                    "Publication was blocked by runtime guardrails.\n"
+                    f"{message}\n"
+                    "Please fix the workspace state, then explicitly call task_complete again."
+                )
+                continue
+
+            git_ref = publish_results(
+                job_id, result, workspace, config.publication
+            )
+            break
+
         gateway.emit_job_completed(
             JobCompletedData(
                 job_id=job_id,
@@ -147,6 +209,14 @@ def _run_job_from_spec(
             )
         )
         logger.info(f"Job {job_id} completed: {result['status']}")
+
+    except ControlledJobFailure as exc:
+        error_msg = str(exc)
+        logger.error(f"Job {job_id} failed: {error_msg}")
+        gateway.emit_job_failed(
+            JobFailedData(job_id=job_id, error=error_msg, traceback=None)
+        )
+        raise
 
     except Exception as exc:
         error_msg = str(exc)
@@ -158,6 +228,17 @@ def _run_job_from_spec(
         raise
 
     finally:
+        if workspace:
+            cleanup_issue = finalize_workspace_after_job(workspace)
+            if cleanup_issue:
+                gateway.emit_runtime_issue(
+                    RuntimeIssueData(
+                        job_id=job_id,
+                        stage="cleanup",
+                        message=cleanup_issue,
+                        fatal=False,
+                    )
+                )
         gateway.close()
 
 

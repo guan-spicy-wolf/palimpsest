@@ -24,6 +24,7 @@ tools:
 publication:
   strategy: "branch"
   branch_prefix: "palimpsest/job"
+  max_recovery_attempts: 1
 
 eventstore:
   url: ""
