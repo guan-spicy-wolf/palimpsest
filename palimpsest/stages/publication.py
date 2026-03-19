@@ -12,34 +12,34 @@ def publish_results(
     workspace_path: str,
     config: PublicationConfig,
 ) -> str | None:
-    """Git commit and push. Returns git_ref 'branch:sha' or None."""
+    """Git commit and push. Returns git_ref 'branch:sha' or None.
+
+    Raises on failure — the caller (runner.py) handles the exception
+    and emits the appropriate job_failed event.
+    """
     if result.get("status") == "failed":
         logger.warning("Skipping publication for failed job")
         return None
 
-    try:
-        repo = git.Repo(workspace_path)
-        repo.git.add("-A")
+    repo = git.Repo(workspace_path)
+    repo.git.add("-A")
 
-        summary = result.get("summary", "")[:500]
-        if repo.is_dirty(index=True) or repo.untracked_files:
-            commit = repo.index.commit(f"feat: palimpsest job {job_id}\n\n{summary}")
-            logger.info(f"Committed {commit.hexsha[:8]}")
-        else:
-            repo.git.commit("--allow-empty", "-m", f"chore: palimpsest job {job_id} (no changes)")
-            commit = repo.head.commit
-            logger.info(f"Empty commit {commit.hexsha[:8]}")
+    summary = result.get("summary", "")[:500]
+    if repo.is_dirty(index=True) or repo.untracked_files:
+        commit = repo.index.commit(f"feat: palimpsest job {job_id}\n\n{summary}")
+        logger.info(f"Committed {commit.hexsha[:8]}")
+    else:
+        repo.git.commit("--allow-empty", "-m", f"chore: palimpsest job {job_id} (no changes)")
+        commit = repo.head.commit
+        logger.info(f"Empty commit {commit.hexsha[:8]}")
 
-        branch_name = repo.active_branch.name
-        git_ref = f"{branch_name}:{commit.hexsha}"
+    branch_name = repo.active_branch.name
+    git_ref = f"{branch_name}:{commit.hexsha}"
 
-        if repo.remotes:
-            logger.info(f"Pushing {branch_name}")
-            repo.remotes[0].push(branch_name)
-        else:
-            logger.warning("No remote configured, skipping push")
+    if repo.remotes:
+        logger.info(f"Pushing {branch_name}")
+        repo.remotes[0].push(branch_name)
+    else:
+        logger.warning("No remote configured, skipping push")
 
-        return git_ref
-    except Exception as exc:
-        logger.error(f"Publication failed: {exc}")
-        return None
+    return git_ref
