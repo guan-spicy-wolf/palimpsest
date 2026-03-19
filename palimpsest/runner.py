@@ -32,7 +32,7 @@ from palimpsest.events import (
     JobStartedData,
 )
 from palimpsest.gateway import BuiltinToolGateway, LiteLLMGateway
-from palimpsest.gateway.tool_loader import EvoToolLoader
+from palimpsest.gateway.tool_loader import resolve_tool_providers, EvoToolGateway
 from palimpsest.gateway.tools import CompositeToolGateway
 from palimpsest.runtime import (
     EventGateway,
@@ -124,12 +124,8 @@ def _run_job_from_spec(
             job_id,
             spawn_callback=spawn_cb,
         )
-        evo_tools = EvoToolLoader(
-            evo_path,
-            spec.tools,
-            gateway,
-            job_id,
-        )
+        evo_providers = resolve_tool_providers(evo_path, spec.tools)
+        evo_tools = EvoToolGateway(evo_providers, gateway, job_id)
         tools = CompositeToolGateway([builtin_tools, evo_tools])
 
         result = run_interaction_loop(

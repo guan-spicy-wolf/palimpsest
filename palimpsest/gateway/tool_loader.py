@@ -1,17 +1,11 @@
-"""Dynamic tool loader — loads ToolProvider implementations from evo.
+"""Tool-specific provider resolver + gateway wrapper.
 
-Scans ``evo/tools/*.py`` for classes that implement ``ToolProvider``
-and registers them.  This allows the Agent to evolve its own tool
-repertoire using full Python — not limited to YAML templates.
-
-The role YAML declares tool names; the loader matches them against
-the ``ToolSpec.name`` exposed by each discovered ``ToolProvider``.
+Delegates to the generic resolve_providers() for discovery and loading.
+Wraps resolved providers in EvoToolGateway for transparent event capture.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 import time
 from pathlib import Path
 
@@ -21,107 +15,61 @@ from palimpsest.events import ToolExecData, ToolResultData
 from palimpsest.gateway.tools import ToolGateway, ToolResult
 from palimpsest.runtime.event_gateway import EventGateway
 from palimpsest.runtime.interfaces import ToolProvider
+from palimpsest.runtime.resolver import resolve_providers
 
 
-class EvoToolLoader(ToolGateway):
-    """Loads ToolProvider implementations from evo/tools/*.py.
+def resolve_tool_providers(
+    evo_root: str | Path,
+    requested: list[str],
+) -> dict[str, ToolProvider]:
+    """Resolve tool providers from evo/tools/*.py."""
+    evo_root = Path(evo_root)
+    return resolve_providers(
+        scan_dir=evo_root / "tools",
+        base_class=ToolProvider,
+        key_fn=lambda inst: [s.name for s in inst.tools()],
+        requested=requested,
+    )
 
-    Discovery:
-      1. Scan all .py files in evo/tools/
-      2. Import each module and find ToolProvider subclasses
-      3. Instantiate each provider and index by tool name
-      4. Filter to only the tools requested by the role
-    """
+
+class EvoToolGateway(ToolGateway):
+    """Wraps resolved ToolProviders into the ToolGateway interface with event capture."""
 
     def __init__(
         self,
-        evo_root: str | Path,
-        requested_tools: list[str],
+        providers: dict[str, ToolProvider],
         gateway: EventGateway,
         job_id: str,
     ):
-        self._evo_root = Path(evo_root)
+        self._providers = providers
         self._gateway = gateway
         self._job_id = job_id
-        # name -> (provider_instance, ToolSpec)
-        self._tools: dict[str, tuple[ToolProvider, object]] = {}
-
-        self._discover_and_register(requested_tools)
-
-    def _discover_and_register(self, requested: list[str]) -> None:
-        """Scan evo/tools/*.py, import modules, find ToolProvider subclasses."""
-        tools_dir = self._evo_root / "tools"
-        if not tools_dir.is_dir():
-            logger.warning(f"No tools directory found at {tools_dir}")
-            return
-
-        requested_set = set(requested)
-
-        for py_file in sorted(tools_dir.glob("*.py")):
-            if py_file.name.startswith("_"):
+        # Pre-build schema list
+        self._schemas: list[dict] = []
+        seen: set[str] = set()
+        for name, provider in providers.items():
+            if name in seen:
                 continue
-            try:
-                providers = self._load_module_providers(py_file)
-                for provider in providers:
-                    for spec in provider.tools():
-                        if spec.name in requested_set:
-                            self._tools[spec.name] = (provider, spec)
-                            logger.debug(f"Registered tool '{spec.name}' from {py_file.name}")
-            except Exception as exc:
-                logger.error(f"Failed to load tools from {py_file}: {exc}")
-
-        # Warn about missing tools
-        found = set(self._tools.keys())
-        missing = requested_set - found
-        if missing:
-            logger.warning(f"Tools not found in evo: {missing}")
-
-    @staticmethod
-    def _load_module_providers(py_path: Path) -> list[ToolProvider]:
-        """Dynamically import a .py file and return all ToolProvider instances."""
-        module_name = f"evo_tools_{py_path.stem}"
-
-        spec = importlib.util.spec_from_file_location(module_name, py_path)
-        if spec is None or spec.loader is None:
-            return []
-
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-
-        providers = []
-        for attr_name in dir(module):
-            attr = getattr(module, attr_name)
-            if (
-                isinstance(attr, type)
-                and issubclass(attr, ToolProvider)
-                and attr is not ToolProvider
-            ):
-                providers.append(attr())
-
-        return providers
+            for spec in provider.tools():
+                if spec.name == name:
+                    self._schemas.append({
+                        "type": "function",
+                        "function": {
+                            "name": spec.name,
+                            "description": spec.description,
+                            "parameters": spec.parameters,
+                        },
+                    })
+                    seen.add(name)
 
     def schema(self) -> list[dict]:
-        schemas = []
-        for name, (provider, spec) in self._tools.items():
-            schemas.append({
-                "type": "function",
-                "function": {
-                    "name": spec.name,
-                    "description": spec.description,
-                    "parameters": spec.parameters,
-                },
-            })
-        return schemas
+        return self._schemas
 
     def execute(self, name: str, call_id: str, args: dict, workspace: str) -> ToolResult:
-        entry = self._tools.get(name)
-        if not entry:
+        provider = self._providers.get(name)
+        if not provider:
             return ToolResult(success=False, output=f"Unknown evo tool: {name}")
 
-        provider, spec = entry
-
-        # Transparent event: tool execution start
         self._gateway.emit_tool_exec(
             ToolExecData(
                 job_id=self._job_id,
@@ -140,7 +88,6 @@ class EvoToolLoader(ToolGateway):
 
         duration_ms = (time.monotonic_ns() - start) // 1_000_000
 
-        # Transparent event: tool execution result
         self._gateway.emit_tool_result(
             ToolResultData(
                 job_id=self._job_id,
