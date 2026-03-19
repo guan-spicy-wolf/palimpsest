@@ -59,6 +59,7 @@ class RuntimeIssueData(BaseModel):
     stage: str
     message: str
     fatal: bool = False
+    code: str = ""  # machine-readable issue code (e.g. "duplicate_tool_name")
 
 
 class StageTransitionData(BaseModel):

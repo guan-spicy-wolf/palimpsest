@@ -145,6 +145,7 @@ def _run_job_from_spec(
                     stage="interaction",
                     message=message,
                     fatal=True,
+                    code="duplicate_tool_name",
                 )
             )
             raise ControlledJobFailure(message)
@@ -181,6 +182,7 @@ def _run_job_from_spec(
                         stage="publication",
                         message=message,
                         fatal=not can_retry,
+                        code="publication_guardrail",
                     )
                 )
                 if not can_retry:
@@ -237,6 +239,7 @@ def _run_job_from_spec(
                         stage="cleanup",
                         message=cleanup_issue,
                         fatal=False,
+                        code="cleanup_failed",
                     )
                 )
         gateway.close()
@@ -245,9 +248,7 @@ def _run_job_from_spec(
 def _log_evo_checkout(evo_path: Path) -> None:
     """Log the current checkout SHA of the evolvable repo (informational)."""
     try:
-        import git as _git
-
-        repo = _git.Repo(evo_path)
+        repo = git.Repo(evo_path)
         logger.info(f"Evolvable repo checkout: {repo.head.commit.hexsha[:8]}")
     except Exception:
         logger.debug("Could not read evolvable repo HEAD")

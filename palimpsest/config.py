@@ -14,8 +14,6 @@ class WorkspaceConfig:
     git_token_env: str = ""
 
 
-
-
 @dataclass
 class LLMConfig:
     model: str = "claude-sonnet-4-6"

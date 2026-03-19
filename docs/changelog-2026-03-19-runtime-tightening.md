@@ -128,12 +128,61 @@ After this round, the runtime behaves as follows:
 Command run:
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run python -m pytest -q
+UV_CACHE_DIR=/tmp/uv-cache uv run --python 3.11 python -m pytest -q
 ```
 
 Result:
 
 - `37 passed`
+
+## Review round 2 — fixes applied
+
+### R1. Machine-readable codes on RuntimeIssueData
+
+Files:
+
+- `palimpsest/events.py`
+- `palimpsest/runner.py`
+
+Changes:
+
+- Added `code: str = ""` field to `RuntimeIssueData`.
+- All three emission sites now carry stable codes:
+  - `"duplicate_tool_name"` — duplicate tool names detected at startup
+  - `"publication_guardrail"` — publication preflight check failure
+  - `"cleanup_failed"` — workspace cleanup failure
+
+### R2. Redundant git import in `_log_evo_checkout`
+
+File:
+
+- `palimpsest/runner.py`
+
+Change:
+
+- `_log_evo_checkout` was importing `git as _git` locally despite `git` already being a top-level import. Removed the redundant local import.
+
+### R3. Python version pin
+
+Files:
+
+- `pyproject.toml`
+- `.python-version`
+
+Changes:
+
+- Added `<3.14` upper bound to `requires-python` — pydantic/litellm are not yet compatible with Python 3.14 RC.
+- Pinned `.python-version` to 3.11.
+
+### R4. Cosmetic: config.py blank lines
+
+File:
+
+- `palimpsest/config.py`
+
+Change:
+
+- Removed stray blank line between `WorkspaceConfig` and `LLMConfig`.
 
 ## Remaining Gaps
 
@@ -150,19 +199,7 @@ Status:
 - The runtime still feeds provider-returned `raw_message` structures back into later LLM calls with minimal normalization.
 - This is likely to become a compatibility problem when models/providers differ in message shape.
 
-### 2. Runtime issue events do not yet have stable machine-readable codes
-
-Files:
-
-- `palimpsest/events.py`
-- `palimpsest/runner.py`
-
-Status:
-
-- Runtime issue events currently use free-form text messages.
-- Supervisor or CI automation will be easier once each issue carries a stable `code` field such as `duplicate_tool_name`, `publication_sensitive_file`, or `cleanup_failed`.
-
-### 3. Publication guardrails are still intentionally narrow
+### 2. Publication guardrails are still intentionally narrow
 
 File:
 
@@ -177,7 +214,7 @@ Status:
   - branch policy checks
   - allowlist/blocklist patterns
 
-### 4. Tool naming remains a convention, not a hard architecture rule
+### 3. Tool naming remains a convention, not a hard architecture rule
 
 Files:
 
@@ -192,7 +229,7 @@ Status:
   - provider namespaces like `file_ops.read_file`
   - another enforced naming scheme
 
-### 5. Publication still stages all changes
+### 4. Publication still stages all changes
 
 File:
 
@@ -207,7 +244,6 @@ Status:
 
 Recommended next implementation targets:
 
-1. Add stable `code` values to `RuntimeIssueData`.
-2. Expand publication guardrails into a configurable rule set.
-3. Add an LLM message normalization layer before replaying assistant/tool messages across iterations.
-4. Decide and enforce a long-term tool naming rule.
+1. Expand publication guardrails into a configurable rule set.
+2. Add an LLM message normalization layer before replaying assistant/tool messages across iterations.
+3. Decide and enforce a long-term tool naming rule.
