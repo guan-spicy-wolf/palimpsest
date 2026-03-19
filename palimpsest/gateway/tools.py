@@ -56,6 +56,10 @@ class CompositeToolGateway(ToolGateway):
 
     def __init__(self, gateways: list[ToolGateway]):
         self._gateways = gateways
+        self._dispatch: dict[str, ToolGateway] = {}
+        for gw in gateways:
+            for s in gw.schema():
+                self._dispatch[s["function"]["name"]] = gw
 
     def schema(self) -> list[dict]:
         schemas = []
@@ -64,11 +68,9 @@ class CompositeToolGateway(ToolGateway):
         return schemas
 
     def execute(self, name: str, call_id: str, args: dict, workspace: str) -> ToolResult:
-        # Check each gateway's schema to find the right dispatcher
-        for gw in self._gateways:
-            tool_names = [s["function"]["name"] for s in gw.schema()]
-            if name in tool_names:
-                return gw.execute(name, call_id, args, workspace)
+        gw = self._dispatch.get(name)
+        if gw:
+            return gw.execute(name, call_id, args, workspace)
         return ToolResult(success=False, output=f"Unknown tool: {name}")
 
 
