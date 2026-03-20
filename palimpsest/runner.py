@@ -18,6 +18,7 @@ All events are emitted through the transparent EventGateway.
 
 from __future__ import annotations
 
+import signal
 import traceback
 import uuid
 from pathlib import Path
@@ -58,6 +59,10 @@ _EVO_DIR = "evo"
 class ControlledJobFailure(Exception):
     """Runtime-detected job failure that should not produce a traceback."""
 
+    def __init__(self, message: str, code: str = ""):
+        super().__init__(message)
+        self.code = code
+
 
 def run_job(config: JobConfig) -> None:
     """Resolve the role into a JobSpec and execute the four-stage pipeline."""
@@ -92,21 +97,29 @@ def _run_job_from_spec(
     emitter = EventEmitter(config.eventstore)
     gateway = EventGateway(emitter)
 
-    # Read current checkout SHA for informational logging only.
-    _log_evo_checkout(evo_path)
+    evo_sha = _read_evo_sha(evo_path)
+    logger.info(f"Starting job {job_id} (evo={evo_sha[:8] if evo_sha else '?'})")
 
-    logger.info(f"Starting job {job_id}")
+    # Job-level wall-clock timeout
+    _install_timeout(config.timeout)
 
     workspace: str | None = None
     try:
         # Stage 1: Workspace
-        gateway.emit_job_started(
-            JobStartedData(job_id=job_id, workspace_path="")
-        )
         gateway.emit_stage_transition(job_id, "init", "workspace")
 
         workspace = setup_workspace(
             job_id, config.workspace, config.publication.branch_prefix
+        )
+        base_sha = _read_head_sha(workspace)
+
+        gateway.emit_job_started(
+            JobStartedData(
+                job_id=job_id,
+                workspace_path=workspace,
+                evo_sha=evo_sha,
+                base_sha=base_sha,
+            )
         )
 
         # Stage 2: Context (using JobSpec's prompt and context template)
@@ -124,16 +137,8 @@ def _run_job_from_spec(
         gateway.emit_stage_transition(job_id, "context", "interaction")
         llm = LiteLLMGateway(config.llm, gateway, job_id)
 
-        # Build spawn callback for child task orchestration
-        spawn_cb = _make_spawn_callback(config, evo_path)
-
-        # Compose tool gateways: runtime builtins + evo YAML tools
-        builtin_tools = BuiltinToolGateway(
-            config.tools,
-            gateway,
-            job_id,
-            spawn_callback=spawn_cb,
-        )
+        # Compose tool gateways: runtime builtins + evo tools
+        builtin_tools = BuiltinToolGateway(config.tools, gateway, job_id)
         evo_providers = resolve_tool_providers(evo_path, spec.tools)
         evo_tools = EvoToolGateway(evo_providers, gateway, job_id)
         duplicate_tools = find_duplicate_tool_names([builtin_tools, evo_tools])
@@ -145,9 +150,10 @@ def _run_job_from_spec(
                     stage="interaction",
                     message=message,
                     fatal=True,
+                    code="duplicate_tool_name",
                 )
             )
-            raise ControlledJobFailure(message)
+            raise ControlledJobFailure(message, code="duplicate_tool_name")
 
         tools = CompositeToolGateway([builtin_tools, evo_tools])
         interaction_messages: list[dict] | None = None
@@ -181,10 +187,11 @@ def _run_job_from_spec(
                         stage="publication",
                         message=message,
                         fatal=not can_retry,
+                        code="publication_guardrail",
                     )
                 )
                 if not can_retry:
-                    raise ControlledJobFailure(message)
+                    raise ControlledJobFailure(message, code="publication_guardrail")
 
                 publication_recovery_attempts += 1
                 gateway.emit_stage_transition(job_id, "publication", "interaction")
@@ -214,9 +221,22 @@ def _run_job_from_spec(
         error_msg = str(exc)
         logger.error(f"Job {job_id} failed: {error_msg}")
         gateway.emit_job_failed(
-            JobFailedData(job_id=job_id, error=error_msg, traceback=None)
+            JobFailedData(job_id=job_id, error=error_msg, code=exc.code)
         )
         raise
+
+    except _JobTimeout:
+        logger.error(f"Job {job_id} timed out ({config.timeout}s)")
+        gateway.emit_job_failed(
+            JobFailedData(
+                job_id=job_id,
+                error=f"Job timed out after {config.timeout}s",
+                code="timeout",
+            )
+        )
+        raise ControlledJobFailure(
+            f"Job timed out after {config.timeout}s", code="timeout"
+        )
 
     except Exception as exc:
         error_msg = str(exc)
@@ -237,64 +257,40 @@ def _run_job_from_spec(
                         stage="cleanup",
                         message=cleanup_issue,
                         fatal=False,
+                        code="cleanup_failed",
                     )
                 )
         gateway.close()
 
 
-def _log_evo_checkout(evo_path: Path) -> None:
-    """Log the current checkout SHA of the evolvable repo (informational)."""
-    try:
-        import git as _git
+class _JobTimeout(Exception):
+    """Raised by the SIGALRM handler when the job wall-clock timeout expires."""
 
-        repo = _git.Repo(evo_path)
-        logger.info(f"Evolvable repo checkout: {repo.head.commit.hexsha[:8]}")
+
+def _timeout_handler(signum, frame):
+    raise _JobTimeout()
+
+
+def _install_timeout(seconds: int) -> None:
+    """Arm a SIGALRM-based wall-clock timeout. 0 means no limit."""
+    if seconds <= 0:
+        return
+    signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(seconds)
+
+
+def _read_evo_sha(evo_path: Path) -> str:
+    """Return the HEAD SHA of the evolvable repo, or empty string."""
+    try:
+        return git.Repo(evo_path).head.commit.hexsha
     except Exception:
         logger.debug("Could not read evolvable repo HEAD")
+        return ""
 
 
-def _make_spawn_callback(config: JobConfig, evo_path: Path):
-    """Create a spawn callback that runs child jobs inline.
-
-    In production this would delegate to a Supervisor service.  For now
-    child tasks are executed sequentially in-process, each with their
-    own job ID, workspace, and Role.
-    """
-
-    def spawn_callback(
-        parent_job_id: str,
-        tasks: list[dict],
-        wait_for: str = "all_complete",
-    ) -> list[dict]:
-        from palimpsest.config import (
-            JobConfig as JC,
-            WorkspaceConfig,
-        )
-
-        results: list[dict] = []
-        for task_spec in tasks:
-            child_config = JC(
-                task=task_spec["task"],
-                role=task_spec.get("role", "default"),
-                workspace=WorkspaceConfig(
-                    repo=task_spec.get("repo", config.workspace.repo),
-                    branch=config.workspace.branch,
-                    depth=config.workspace.depth,
-                    git_token_env=config.workspace.git_token_env,
-                ),
-                llm=config.llm,
-                tools=config.tools,
-                publication=config.publication,
-                eventstore=config.eventstore,
-            )
-            try:
-                run_job(child_config)
-                results.append({"status": "success", "summary": task_spec["task"]})
-            except Exception as exc:
-                results.append({"status": "failed", "summary": str(exc)[:200]})
-                if wait_for == "any_failed":
-                    break
-
-        return results
-
-    return spawn_callback
+def _read_head_sha(workspace: str) -> str:
+    """Return the HEAD SHA of the task repo workspace, or empty string."""
+    try:
+        return git.Repo(workspace).head.commit.hexsha
+    except Exception:
+        return ""

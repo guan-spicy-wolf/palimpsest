@@ -133,44 +133,30 @@ class LiteLLMGateway(LLMGateway):
             raw_message=raw_message,
         )
 
+    # Transient error types that warrant a retry.
+    _RETRYABLE = (
+        litellm.RateLimitError,
+        litellm.APIConnectionError,
+        litellm.ServiceUnavailableError,
+    )
+
     def _call_with_retry(self, kwargs: dict):
         """Call litellm.completion with exponential backoff on transient errors."""
         last_exc: Exception | None = None
         for attempt in range(_MAX_LLM_RETRIES + 1):
             try:
                 return litellm.completion(**kwargs)
-            except litellm.RateLimitError as exc:
+            except self._RETRYABLE as exc:
                 last_exc = exc
                 if attempt == _MAX_LLM_RETRIES:
                     break
                 delay = _LLM_RETRY_BASE_DELAY * (2 ** attempt)
                 logger.warning(
-                    f"Rate limited (attempt {attempt + 1}/{_MAX_LLM_RETRIES + 1}), "
-                    f"retrying in {delay}s"
-                )
-                time.sleep(delay)
-            except litellm.APIConnectionError as exc:
-                last_exc = exc
-                if attempt == _MAX_LLM_RETRIES:
-                    break
-                delay = _LLM_RETRY_BASE_DELAY * (2 ** attempt)
-                logger.warning(
-                    f"Connection error (attempt {attempt + 1}/{_MAX_LLM_RETRIES + 1}), "
+                    f"LLM transient error (attempt {attempt + 1}/{_MAX_LLM_RETRIES + 1}), "
                     f"retrying in {delay}s: {exc}"
                 )
                 time.sleep(delay)
-            except litellm.ServiceUnavailableError as exc:
-                last_exc = exc
-                if attempt == _MAX_LLM_RETRIES:
-                    break
-                delay = _LLM_RETRY_BASE_DELAY * (2 ** attempt)
-                logger.warning(
-                    f"Service unavailable (attempt {attempt + 1}/{_MAX_LLM_RETRIES + 1}), "
-                    f"retrying in {delay}s"
-                )
-                time.sleep(delay)
             except Exception as exc:
-                # Non-retryable errors (auth, bad request, etc.)
                 logger.error(f"LLM call failed (non-retryable): {exc}")
                 raise
 

@@ -14,8 +14,6 @@ class WorkspaceConfig:
     git_token_env: str = ""
 
 
-
-
 @dataclass
 class LLMConfig:
     model: str = "claude-sonnet-4-6"
@@ -49,6 +47,7 @@ class EventStoreConfig:
 class JobConfig:
     task: str = ""
     role: str = "default"
+    timeout: int = 0  # job wall-clock timeout in seconds; 0 = no limit
     workspace: WorkspaceConfig = field(default_factory=WorkspaceConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
@@ -63,6 +62,7 @@ class JobConfig:
         return cls(
             task=data.get("task", ""),
             role=data.get("role", "default"),
+            timeout=data.get("timeout", 0),
             workspace=WorkspaceConfig(**data.get("workspace", {})),
             llm=LLMConfig(**data.get("llm", {})),
             tools=ToolsConfig(**data.get("tools", {})),

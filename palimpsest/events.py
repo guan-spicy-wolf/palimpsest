@@ -39,6 +39,8 @@ class ToolResultData(BaseModel):
 class JobStartedData(BaseModel):
     job_id: str
     workspace_path: str
+    evo_sha: str = ""
+    base_sha: str = ""
 
 
 class JobCompletedData(BaseModel):
@@ -52,6 +54,7 @@ class JobFailedData(BaseModel):
     job_id: str
     error: str
     traceback: str | None = None
+    code: str = ""
 
 
 class RuntimeIssueData(BaseModel):
@@ -59,12 +62,25 @@ class RuntimeIssueData(BaseModel):
     stage: str
     message: str
     fatal: bool = False
+    code: str = ""  # machine-readable issue code (e.g. "duplicate_tool_name")
 
 
 class StageTransitionData(BaseModel):
     job_id: str
     from_stage: str
     to_stage: str
+
+
+class SpawnRequestData(BaseModel):
+    """Emitted when the agent requests child task orchestration.
+
+    The runtime does NOT execute child tasks.  It publishes this event
+    so that the external Supervisor can pick it up and handle fork-join.
+    """
+
+    job_id: str
+    tasks: list[dict]
+    wait_for: str = "all_complete"
 
 
 EVENT_TYPES: dict[type, str] = {
@@ -77,4 +93,5 @@ EVENT_TYPES: dict[type, str] = {
     JobFailedData: "job.failed",
     RuntimeIssueData: "job.runtime.issue",
     StageTransitionData: "job.stage.transition",
+    SpawnRequestData: "job.spawn.request",
 }
