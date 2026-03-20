@@ -13,7 +13,7 @@ Accepted
 
 ## Decision
 
-1. **废弃 YAML 采用纯代码定义 (Code-Defined Roles)**：所有的 Role、Context Provider 和 Tool 均使用纯 Python 模块。通过引入原生的 `@tool` 和 `@context_provider` 装饰器，直接使用 Python 函数签名自动生成 JSON Schema，Role 定义由 `RoleDefinition` 数据类显式约束。
+1. **废弃 YAML 采用纯代码定义 (Code-Defined Roles)**：所有的 Role、Context Provider 和 Tool 均使用纯 Python 模块。通过引入原生的 `@tool` 和 `@context_provider` 装饰器，直接使用 Python 函数签名自动生成 JSON Schema，Role 定义由 `RoleDefinition` 数据类显式约束。为了保持核心模块命名高度统一一致，相关处理模块命名为复数形式（如 `roles.py`、`tools.py`、`contexts.py`）。
 2. **重构 LLM Gateway (Native SDKs)**：废弃 `litellm`，重写 `UnifiedLLMGateway`。直接接入原生的 `openai` 和 `anthropic` Python SDK，并在 Gateway 内部针对不同模型的结构化化差异进行精细路由和转换，以确保 Tool Calling 及 Prompt Caching 等高级特性的 100% 兼容。
 3. **Pydantic 事件总线 (Event Gateway)**：将杂乱的 `emit_xxx` 方法精简为统一接口 `emit(event: BaseEvent)`。所有的事件采用 `pydantic.BaseModel` 以获得原生 JSON 序列化和校验能力。此外，切断了 `evo` 层对 EventGateway 的直接引用，实行严格的领域隔离和读写分离。
 

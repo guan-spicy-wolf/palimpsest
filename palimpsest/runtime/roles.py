@@ -1,7 +1,7 @@
 """Role resolver — reads Role definitions from the evolvable repository.
 
 A Role is a convenience definition used only at the plan/spawn stage.
-``RoleResolver.resolve()`` extracts a ``RoleDefinition`` object from a `.py` file
+``RoleManager.resolve()`` extracts a ``RoleDefinition`` object from a `.py` file
 and expands it into a ``JobSpec`` — the flat, self-contained execution configuration
 that the runtime consumes. After expansion the role object is no longer needed;
 the runtime operates solely on the ``JobSpec``.
@@ -45,7 +45,7 @@ class JobSpec:
     source_role: str = ""  # informational only; not used at execution time
 
 
-class RoleResolver:
+class RoleManager:
     """Expands Role templates from a checked-out evolvable repository into JobSpecs."""
 
     def __init__(self, evo_root: str | Path):

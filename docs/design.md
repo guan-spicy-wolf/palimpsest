@@ -28,7 +28,7 @@ palimpsest/
 │   ├── event_gateway.py   Transparent event capture gateway
 │   ├── interfaces.py      ContextProvider + ToolProvider ABCs
 │   ├── resolver.py        Generic one-shot provider loader
-│   └── role_resolver.py   Role template → JobSpec expansion
+│   └── roles.py   Role template → JobSpec expansion
 ├── gateway/
 │   ├── llm.py             LiteLLM wrapper with retry + events
 │   ├── tools.py           Builtin tools (bash, spawn) + CompositeGateway
@@ -52,7 +52,7 @@ evo/                       Evolvable repository (muscle)
 ```
 run_job(config)
   │
-  ├─ RoleResolver.resolve(role_name) → JobSpec
+  ├─ RoleManager.resolve(role_name) → JobSpec
   │
   └─ _run_job_from_spec(config, spec)
        │

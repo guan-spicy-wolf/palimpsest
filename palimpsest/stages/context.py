@@ -13,7 +13,7 @@ from loguru import logger
 
 from palimpsest.runtime.contexts import resolve_context_functions
 from palimpsest.runtime.event_gateway import EventGateway
-from palimpsest.runtime.role_resolver import JobSpec
+from palimpsest.runtime.roles import JobSpec
 
 
 def build_context(

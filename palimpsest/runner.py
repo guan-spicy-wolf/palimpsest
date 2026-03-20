@@ -33,10 +33,10 @@ from palimpsest.events import (
 from palimpsest.runtime import (
     EventGateway,
     UnifiedLLMGateway,
-    RoleResolver,
+    RoleManager,
     UnifiedToolGateway,
 )
-from palimpsest.runtime.role_resolver import JobSpec
+from palimpsest.runtime.roles import JobSpec
 from palimpsest.stages import (
     build_context,
     finalize_workspace_after_job,
@@ -63,7 +63,7 @@ def run_job(config: JobConfig) -> None:
     """Resolve the role into a JobSpec and execute the four-stage pipeline."""
     evo_path = Path.cwd() / _EVO_DIR
 
-    resolver = RoleResolver(evo_path)
+    resolver = RoleManager(evo_path)
     spec = resolver.resolve(config.role)
 
     logger.info(

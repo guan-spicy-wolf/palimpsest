@@ -85,12 +85,6 @@ def _is_retryable_error(exc: Exception) -> bool:
     if isinstance(exc, (ConnectionError, TimeoutError)):
         return True
     
-    # Generic network-related errors
-    if isinstance(exc, (OSError, IOError)):
-        error_str = str(exc).lower()
-        if any(keyword in error_str for keyword in ["timeout", "connection", "network", "broken pipe", "reset"]):
-            return True
-    
     # Check for common HTTP error patterns
     error_str = str(exc).lower()
     
@@ -116,12 +110,10 @@ def _is_retryable_error(exc: Exception) -> bool:
             return True
     
     # Generic retryable patterns
-    if any(keyword in error_str for keyword in ["timeout", "connection", "network"]):
+    if any(keyword in error_str for keyword in ["timeout", "connection", "network", "broken pipe", "reset"]):
         return True
     
-    # By default, retry all exceptions during testing/development
-    # In production, you might want to be more selective
-    return True
+    return False
 
 
 def _extract_retry_after(exc: Exception) -> float | None:

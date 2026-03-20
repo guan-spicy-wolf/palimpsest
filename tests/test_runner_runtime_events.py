@@ -4,7 +4,7 @@ import pytest
 
 from palimpsest.config import JobConfig
 from palimpsest.events import JobCompletedData, JobFailedData, JobStartedData, RuntimeIssueData
-from palimpsest.runtime.role_resolver import JobSpec
+from palimpsest.runtime.roles import JobSpec
 from palimpsest.runner import ControlledJobFailure, _run_job_from_spec
 
 
