@@ -62,7 +62,9 @@ class RuntimeIssueData(BaseModel):
     stage: str
     fatal: bool = False
     code: str = ""  # machine-readable issue code (e.g. "duplicate_tool_name")
-    details: dict = {}  # structured context (e.g. {"names": [...], "violations": [...]})
+    names: list[str] = []  # duplicate_tool_name: conflicting tool names
+    violations: list[str] = []  # publication_guardrail: blocked files/reasons
+    error: str = ""  # cleanup_failed: error description
 
 
 class StageTransitionData(BaseModel):

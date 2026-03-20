@@ -39,6 +39,8 @@ def build_context(
     evo_root: Path | None = None,
 ) -> dict:
     """Build LLM context from a resolved JobSpec. Returns {"system": str, "task": str}."""
+    gateway.emit_stage_transition("workspace", "context")
+
     system_prompt = spec.prompt
 
     sections = spec.context_template.get("sections", [])

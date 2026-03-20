@@ -8,12 +8,9 @@ subject to Agent self-evolution.  It orchestrates:
   3. Interaction loop (LLM calls + tool execution)
   4. Publication (git commit + push + completion event)
 
-The runner accepts a *resolved* ``JobSpec`` — a flat execution
-configuration produced by expanding a Role template.  At execution time
-the runner never references the original role name; it depends solely on
-the JobSpec.
-
-All events are emitted through the transparent EventGateway.
+Stage-level events (transitions, job-started, cleanup issues) are emitted
+by the stage functions themselves.  The runner only emits job-lifecycle
+events (completed / failed) and orchestration-level events.
 """
 
 from __future__ import annotations
@@ -31,7 +28,6 @@ from palimpsest.emitter import EventEmitter
 from palimpsest.events import (
     JobCompletedData,
     JobFailedData,
-    JobStartedData,
     RuntimeIssueData,
 )
 from palimpsest.runtime import (
@@ -101,8 +97,21 @@ def _run_job_from_spec(
 
     workspace: str | None = None
     try:
-        workspace = _stage_workspace(job_id, config, gateway, evo_sha)
-        context = _stage_context(job_id, workspace, config, spec, gateway, evo_path)
+        # Stage 1: Workspace (emits stage-transition + job-started internally)
+        workspace = setup_workspace(
+            job_id,
+            config.workspace,
+            config.publication.branch_prefix,
+            gateway=gateway,
+            evo_sha=evo_sha,
+        )
+
+        # Stage 2: Context (emits stage-transition internally)
+        context = build_context(
+            job_id, workspace, config.task, spec, gateway, evo_root=evo_path,
+        )
+
+        # Stage 3+4: Interaction and publication
         tools = _setup_tools(config, spec, evo_path, gateway)
         result, git_ref = _stage_interaction_and_publication(
             job_id, context, workspace, config, spec, gateway, tools,
@@ -147,51 +156,14 @@ def _run_job_from_spec(
         raise
 
     finally:
-        _cleanup(workspace, gateway)
+        if workspace:
+            finalize_workspace_after_job(workspace, gateway=gateway)
+        gateway.close()
 
 
 # ---------------------------------------------------------------------------
-# Stage helpers
+# Internal helpers (orchestration logic, not independent stages)
 # ---------------------------------------------------------------------------
-
-def _stage_workspace(
-    job_id: str,
-    config: JobConfig,
-    gateway: EventGateway,
-    evo_sha: str,
-) -> str:
-    """Stage 1: set up workspace and emit job-started event. Returns workspace path."""
-    gateway.emit_stage_transition("init", "workspace")
-
-    workspace = setup_workspace(
-        job_id, config.workspace, config.publication.branch_prefix
-    )
-    base_sha = _read_head_sha(workspace)
-
-    gateway.emit_job_started(
-        JobStartedData(
-            workspace_path=workspace,
-            evo_sha=evo_sha,
-            base_sha=base_sha,
-        )
-    )
-    return workspace
-
-
-def _stage_context(
-    job_id: str,
-    workspace: str,
-    config: JobConfig,
-    spec: JobSpec,
-    gateway: EventGateway,
-    evo_path: Path,
-) -> dict:
-    """Stage 2: build LLM context from the resolved JobSpec."""
-    gateway.emit_stage_transition("workspace", "context")
-    return build_context(
-        job_id, workspace, config.task, spec, gateway, evo_root=evo_path,
-    )
-
 
 def _setup_tools(
     config: JobConfig,
@@ -211,7 +183,7 @@ def _setup_tools(
                 stage="interaction",
                 fatal=True,
                 code="duplicate_tool_name",
-                details={"names": duplicate_tools},
+                names=duplicate_tools,
             )
         )
         raise ControlledJobFailure(
@@ -264,7 +236,7 @@ def _stage_interaction_and_publication(
                     stage="publication",
                     fatal=not can_retry,
                     code="publication_guardrail",
-                    details={"violations": issues},
+                    violations=issues,
                 )
             )
             if not can_retry:
@@ -284,22 +256,6 @@ def _stage_interaction_and_publication(
 
         git_ref = publish_results(job_id, result, workspace, config.publication)
         return result, git_ref
-
-
-def _cleanup(workspace: str | None, gateway: EventGateway) -> None:
-    """Best-effort workspace cleanup and gateway shutdown."""
-    if workspace:
-        cleanup_issue = finalize_workspace_after_job(workspace)
-        if cleanup_issue:
-            gateway.emit_runtime_issue(
-                RuntimeIssueData(
-                    stage="cleanup",
-                    fatal=False,
-                    code="cleanup_failed",
-                    details={"error": cleanup_issue},
-                )
-            )
-    gateway.close()
 
 
 # ---------------------------------------------------------------------------
@@ -332,12 +288,4 @@ def _read_evo_sha(evo_path: Path) -> str:
         return git.Repo(evo_path).head.commit.hexsha
     except Exception:
         logger.debug("Could not read evolvable repo HEAD")
-        return ""
-
-
-def _read_head_sha(workspace: str) -> str:
-    """Return the HEAD SHA of the task repo workspace, or empty string."""
-    try:
-        return git.Repo(workspace).head.commit.hexsha
-    except Exception:
         return ""
