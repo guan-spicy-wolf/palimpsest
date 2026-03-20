@@ -1,7 +1,8 @@
-"""LLM gateway — manages communication with the language model.
+"""LLM gateway — native wrappers for OpenAI and Anthropic.
 
-Part of the Runtime (skeleton).  Event emission is handled transparently
-through the EventGateway; the Agent never sees these events being sent.
+Part of the Runtime (skeleton). Replaces litellm with a unified gateway 
+that transparently routes between the official `openai` and `anthropic` SDKs, 
+providing absolute control over tool formats and caching primitives.
 """
 
 from __future__ import annotations
@@ -12,8 +13,8 @@ import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
-import litellm
 from loguru import logger
 
 from palimpsest.config import LLMConfig
@@ -46,13 +47,8 @@ class LLMGateway(ABC):
         pass
 
 
-# Maximum retries for transient LLM errors (rate limits, network failures)
-_MAX_LLM_RETRIES = 3
-_LLM_RETRY_BASE_DELAY = 2  # seconds, exponential backoff: 2, 4, 8
-
-
-class LiteLLMGateway(LLMGateway):
-    """LLM gateway using litellm with transparent event capture and retry."""
+class UnifiedLLMGateway(LLMGateway):
+    """Unified Native LLM Gateway routing between OpenAI and Anthropic SDKs."""
 
     def __init__(self, config: LLMConfig, gateway: EventGateway):
         self._config = config
@@ -63,8 +59,7 @@ class LiteLLMGateway(LLMGateway):
     def call(self, messages: list[dict], tools_schema: list[dict]) -> LLMResponse:
         self._iteration += 1
 
-        # Transparent event: LLM request
-        self._gateway.emit_llm_request(
+        self._gateway.emit(
             LLMRequestData(
                 model=self._config.model,
                 messages_count=len(messages),
@@ -73,44 +68,73 @@ class LiteLLMGateway(LLMGateway):
             )
         )
 
-        kwargs = {
-            "model": self._config.model,
-            "messages": messages,
-            "tools": tools_schema,
-            "tool_choice": "auto",
-            "temperature": self._config.temperature,
-        }
-
-        if self._api_key:
-            kwargs["api_key"] = self._api_key
-        if self._config.api_base:
-            kwargs["api_base"] = self._config.api_base
-
         start = time.monotonic_ns()
-        response = self._call_with_retry(kwargs)
+
+        if self._config.model.startswith("claude-"):
+            response = self._call_anthropic(messages, tools_schema)
+        else:
+            response = self._call_openai(messages, tools_schema)
 
         duration_ms = (time.monotonic_ns() - start) // 1_000_000
 
-        choice = response.choices[0]
-        msg = choice.message
-
-        # Transparent event: LLM response
-        self._gateway.emit_llm_response(
+        self._gateway.emit(
             LLMResponseData(
                 model=self._config.model,
-                finish_reason=choice.finish_reason or "unknown",
-                input_tokens=getattr(response.usage, "prompt_tokens", 0) or 0,
-                output_tokens=getattr(response.usage, "completion_tokens", 0) or 0,
+                finish_reason=response.finish_reason,
+                input_tokens=response.input_tokens,
+                output_tokens=response.output_tokens,
                 duration_ms=duration_ms,
             )
         )
+
+        return response
+
+    def _call_openai(self, messages: list[dict], tools_schema: list[dict]) -> LLMResponse:
+        try:
+            import openai
+        except ImportError:
+            raise ImportError("openai package is required. Run: uv add openai")
+
+        client = openai.OpenAI(
+            api_key=self._api_key or os.environ.get("OPENAI_API_KEY"),
+            base_url=self._config.api_base if self._config.api_base else None,
+        )
+
+        # Ensure tools match exact OpenAI spec (strip extra top-level keys if any)
+        oai_tools = []
+        for t in tools_schema:
+            oai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": t["function"]["name"],
+                    "description": t["function"].get("description", ""),
+                    "parameters": t["function"].get("parameters", {}),
+                }
+            })
+
+        kwargs: dict[str, Any] = {
+            "model": self._config.model,
+            "messages": messages,
+            "temperature": self._config.temperature,
+        }
+        if oai_tools:
+            kwargs["tools"] = oai_tools
+            kwargs["tool_choice"] = "auto"
+
+        raw_response = client.chat.completions.create(**kwargs)
+
+        choice = raw_response.choices[0]
+        msg = choice.message
 
         tool_calls = []
         if msg.tool_calls:
             for tc in msg.tool_calls:
                 args = tc.function.arguments
                 if isinstance(args, str):
-                    args = json.loads(args)
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {}
                 tool_calls.append(
                     ToolCall(
                         id=tc.id or str(uuid.uuid4()),
@@ -125,37 +149,135 @@ class LiteLLMGateway(LLMGateway):
             text=msg.content,
             tool_calls=tool_calls,
             finish_reason=choice.finish_reason or "unknown",
-            input_tokens=getattr(response.usage, "prompt_tokens", 0) or 0,
-            output_tokens=getattr(response.usage, "completion_tokens", 0) or 0,
+            input_tokens=getattr(raw_response.usage, "prompt_tokens", 0) or 0,
+            output_tokens=getattr(raw_response.usage, "completion_tokens", 0) or 0,
             raw_message=raw_message,
         )
 
-    # Transient error types that warrant a retry.
-    _RETRYABLE = (
-        litellm.RateLimitError,
-        litellm.APIConnectionError,
-        litellm.ServiceUnavailableError,
-    )
+    def _call_anthropic(self, messages: list[dict], tools_schema: list[dict]) -> LLMResponse:
+        try:
+            import anthropic
+        except ImportError:
+            raise ImportError("anthropic package is required. Run: uv add anthropic")
 
-    def _call_with_retry(self, kwargs: dict):
-        """Call litellm.completion with exponential backoff on transient errors."""
-        last_exc: Exception | None = None
-        for attempt in range(_MAX_LLM_RETRIES + 1):
-            try:
-                return litellm.completion(**kwargs)
-            except self._RETRYABLE as exc:
-                last_exc = exc
-                if attempt == _MAX_LLM_RETRIES:
-                    break
-                delay = _LLM_RETRY_BASE_DELAY * (2 ** attempt)
-                logger.warning(
-                    f"LLM transient error (attempt {attempt + 1}/{_MAX_LLM_RETRIES + 1}), "
-                    f"retrying in {delay}s: {exc}"
-                )
-                time.sleep(delay)
-            except Exception as exc:
-                logger.error(f"LLM call failed (non-retryable): {exc}")
-                raise
+        client = anthropic.Anthropic(
+            api_key=self._api_key or os.environ.get("ANTHROPIC_API_KEY"),
+            base_url=self._config.api_base if self._config.api_base else None,
+        )
 
-        logger.error(f"LLM call failed after {_MAX_LLM_RETRIES + 1} attempts: {last_exc}")
-        raise last_exc
+        # 1. Translate messages to Anthropic format
+        system_text = ""
+        anth_messages = []
+        
+        for m in messages:
+            role = m["role"]
+            if role == "system":
+                system_text += m["content"] + "\n\n"
+            elif role == "user":
+                anth_messages.append({"role": "user", "content": m["content"]})
+            elif role == "assistant":
+                content = []
+                if m.get("content"):
+                    content.append({"type": "text", "text": m["content"]})
+                for tc in m.get("tool_calls", []):
+                    args = tc["function"]["arguments"]
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            args = {}
+                    content.append({
+                        "type": "tool_use",
+                        "id": tc["id"],
+                        "name": tc["function"]["name"],
+                        "input": args
+                    })
+                if content:
+                    anth_messages.append({"role": "assistant", "content": content})
+            elif role == "tool":
+                # OpenAI uses 'tool' role for results. Anthropic uses 'user' containing a tool_result block.
+                # In palimpsest, interactions currently only provide string `m["content"]`.
+                content_val = m["content"]
+                if not isinstance(content_val, list):
+                    content_val = [{"type": "text", "text": str(content_val)}]
+                
+                anth_messages.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": m.get("tool_call_id", ""),
+                        "content": content_val
+                    }]
+                })
+
+        # 2. Compress consecutive messages of the same role (Anthropic strict requirement)
+        compressed = []
+        for am in anth_messages:
+            if not compressed:
+                compressed.append(am)
+                continue
+            last = compressed[-1]
+            if last["role"] == am["role"]:
+                c1 = last["content"] if isinstance(last["content"], list) else [{"type": "text", "text": last["content"]}]
+                c2 = am["content"] if isinstance(am["content"], list) else [{"type": "text", "text": am["content"]}]
+                last["content"] = c1 + c2
+            else:
+                compressed.append(am)
+
+        # 3. Translate tool schemas
+        anth_tools = []
+        for t in tools_schema:
+            anth_tools.append({
+                "name": t["function"]["name"],
+                "description": t["function"].get("description", ""),
+                "input_schema": t["function"].get("parameters", {}),
+            })
+
+        kwargs: dict[str, Any] = {
+            "model": self._config.model,
+            "messages": compressed,
+            "temperature": self._config.temperature,
+            "max_tokens": 4096, # Required by Anthropic API
+        }
+        
+        system_text = system_text.strip()
+        if system_text:
+            kwargs["system"] = system_text
+            
+        if anth_tools:
+            kwargs["tools"] = anth_tools
+            # Anthropic tool_choice
+            kwargs["tool_choice"] = {"type": "auto"}
+
+        raw_response = client.messages.create(**kwargs)
+
+        # Transform response back to generic format
+        text = ""
+        tool_calls = []
+        raw_message = {"role": "assistant", "content": None, "tool_calls": []}
+        
+        for block in raw_response.content:
+            if block.type == "text":
+                text += block.text
+            elif block.type == "tool_use":
+                tc = {
+                    "id": block.id,
+                    "type": "function",
+                    "function": {
+                        "name": block.name,
+                        "arguments": json.dumps(block.input)
+                    }
+                }
+                tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=block.input))
+                raw_message["tool_calls"].append(tc)
+                
+        raw_message["content"] = text if text else None
+        
+        return LLMResponse(
+            text=text if text else None,
+            tool_calls=tool_calls,
+            finish_reason=raw_response.stop_reason or "unknown",
+            input_tokens=getattr(raw_response.usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(raw_response.usage, "output_tokens", 0) or 0,
+            raw_message=raw_message,
+        )

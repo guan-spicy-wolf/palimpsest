@@ -31,15 +31,12 @@ from palimpsest.events import (
     RuntimeIssueData,
 )
 from palimpsest.runtime import (
-    BuiltinToolProvider,
     EventGateway,
-    LiteLLMGateway,
+    UnifiedLLMGateway,
     RoleResolver,
     UnifiedToolGateway,
-    resolve_tool_providers,
 )
 from palimpsest.runtime.role_resolver import JobSpec
-from palimpsest.runtime.tools import find_duplicate_tool_names
 from palimpsest.stages import (
     build_context,
     finalize_workspace_after_job,
@@ -113,11 +110,12 @@ def _run_job_from_spec(
 
         # Stage 3+4: Interaction and publication
         tools = _setup_tools(config, spec, evo_path, gateway)
+        llm = _setup_llm(config, gateway)
         result, git_ref = _stage_interaction_and_publication(
-            job_id, context, workspace, config, spec, gateway, tools,
+            job_id, context, workspace, config, spec, gateway, tools, llm,
         )
 
-        gateway.emit_job_completed(
+        gateway.emit(
             JobCompletedData(
                 status=result["status"],
                 git_ref=git_ref,
@@ -129,14 +127,14 @@ def _run_job_from_spec(
     except ControlledJobFailure as exc:
         error_msg = str(exc)
         logger.error(f"Job {job_id} failed: {error_msg}")
-        gateway.emit_job_failed(
+        gateway.emit(
             JobFailedData(error=error_msg, code=exc.code)
         )
         raise
 
     except _JobTimeout:
         logger.error(f"Job {job_id} timed out ({config.timeout}s)")
-        gateway.emit_job_failed(
+        gateway.emit(
             JobFailedData(
                 error=f"Job timed out after {config.timeout}s",
                 code="timeout",
@@ -150,7 +148,7 @@ def _run_job_from_spec(
         error_msg = str(exc)
         tb_str = traceback.format_exc()
         logger.exception(f"Job {job_id} failed")
-        gateway.emit_job_failed(
+        gateway.emit(
             JobFailedData(error=error_msg, traceback=tb_str)
         )
         raise
@@ -172,26 +170,12 @@ def _setup_tools(
     gateway: EventGateway,
 ) -> UnifiedToolGateway:
     """Create the unified tool gateway from builtin + evo providers."""
-    builtin = BuiltinToolProvider(config.tools, gateway)
-    builtin_providers = builtin.as_provider_dict()
-    evo_providers = resolve_tool_providers(evo_path, spec.tools)
+    return UnifiedToolGateway(config.tools, evo_path, spec.tools, gateway)
 
-    duplicate_tools = find_duplicate_tool_names(builtin_providers, evo_providers)
-    if duplicate_tools:
-        gateway.emit_runtime_issue(
-            RuntimeIssueData(
-                stage="interaction",
-                fatal=True,
-                code="duplicate_tool_name",
-                names=duplicate_tools,
-            )
-        )
-        raise ControlledJobFailure(
-            "Duplicate tool names configured: " + ", ".join(duplicate_tools),
-            code="duplicate_tool_name",
-        )
 
-    return UnifiedToolGateway({**builtin_providers, **evo_providers}, gateway)
+def _setup_llm(config: JobConfig, gateway: EventGateway) -> UnifiedLLMGateway:
+    """Create the LLM gateway with configuration."""
+    return UnifiedLLMGateway(config.llm, gateway)
 
 
 def _stage_interaction_and_publication(
@@ -202,10 +186,11 @@ def _stage_interaction_and_publication(
     spec: JobSpec,
     gateway: EventGateway,
     tools: UnifiedToolGateway,
+    llm: UnifiedLLMGateway,
 ) -> tuple[dict, str]:
     """Stage 3+4: interaction loop with publication recovery. Returns (result, git_ref)."""
-    gateway.emit_stage_transition("context", "interaction")
-    llm = LiteLLMGateway(config.llm, gateway)
+    from palimpsest.events import StageTransitionData
+    gateway.emit(StageTransitionData(from_stage="context", to_stage="interaction"))
 
     interaction_messages: list[dict] | None = None
     publication_recovery_attempts = 0
@@ -227,11 +212,11 @@ def _stage_interaction_and_publication(
         pending_user_prompt = None
 
         # Publication guardrails
-        gateway.emit_stage_transition("interaction", "publication")
+        gateway.emit(StageTransitionData(from_stage="interaction", to_stage="publication"))
         issues = find_publication_issues(git.Repo(workspace))
         if issues:
             can_retry = publication_recovery_attempts < max_recovery_attempts
-            gateway.emit_runtime_issue(
+            gateway.emit(
                 RuntimeIssueData(
                     stage="publication",
                     fatal=not can_retry,
@@ -246,7 +231,7 @@ def _stage_interaction_and_publication(
                 )
 
             publication_recovery_attempts += 1
-            gateway.emit_stage_transition("publication", "interaction")
+            gateway.emit(StageTransitionData(from_stage="publication", to_stage="interaction"))
             pending_user_prompt = (
                 "Publication was blocked by runtime guardrails.\n"
                 "Issues:\n- " + "\n- ".join(issues) + "\n"

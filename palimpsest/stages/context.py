@@ -6,28 +6,14 @@ a registry of ContextProvider implementations loaded from evo/.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from loguru import logger
 
+from palimpsest.runtime.contexts import resolve_context_functions
 from palimpsest.runtime.event_gateway import EventGateway
-from palimpsest.runtime.interfaces import ContextProvider
-from palimpsest.runtime.resolver import resolve_providers
 from palimpsest.runtime.role_resolver import JobSpec
-
-
-def resolve_context_providers(
-    evo_root: str | Path,
-    requested: list[str],
-) -> dict[str, ContextProvider]:
-    """Resolve context providers from evo/contexts/*.py."""
-    evo_root = Path(evo_root)
-    return resolve_providers(
-        scan_dir=evo_root / "contexts",
-        base_class=ContextProvider,
-        key_fn=lambda inst: [inst.section_type],
-        requested=requested,
-    )
 
 
 def build_context(
@@ -39,25 +25,43 @@ def build_context(
     evo_root: Path | None = None,
 ) -> dict:
     """Build LLM context from a resolved JobSpec. Returns {"system": str, "task": str}."""
-    gateway.emit_stage_transition("workspace", "context")
+    from palimpsest.events import StageTransitionData
+    gateway.emit(StageTransitionData(from_stage="workspace", to_stage="context"))
 
     system_prompt = spec.prompt
 
     sections = spec.context_template.get("sections", [])
     section_types = [s.get("type", "") for s in sections]
 
-    registry: dict[str, ContextProvider] = {}
+    registry = {}
     if evo_root:
-        registry = resolve_context_providers(evo_root, section_types)
-
-    runtime_deps = {"gateway": gateway, "task": task}
+        registry = resolve_context_functions(evo_root, section_types)
 
     parts: list[str] = []
     for section in sections:
         section_type = section.get("type", "")
-        provider = registry.get(section_type)
-        if provider:
-            parts.append(provider.render(job_id, workspace_path, section, runtime_deps=runtime_deps))
+        provider_fn = registry.get(section_type)
+        if provider_fn:
+            try:
+                sig = inspect.signature(provider_fn)
+                kwargs = dict(section)
+                # Remove the structural identifier so it isn't passed as a kwarg
+                kwargs.pop("type", None)
+
+                # Inject runtime dependencies if requested
+                if "workspace" in sig.parameters:
+                    kwargs["workspace"] = workspace_path
+                if "job_id" in sig.parameters:
+                    kwargs["job_id"] = job_id
+                if "task" in sig.parameters:
+                    kwargs["task"] = task
+                    
+                content = provider_fn(**kwargs)
+                parts.append(str(content))
+            except Exception as exc:
+                logger.error(f"Context provider {section_type!r} failed: {exc}")
+                # Execution-time defense: fallback instead of failing job
+                parts.append(f"[Error rendering context section {section_type!r}: {exc}]")
         else:
             logger.warning(f"No provider for context section type: {section_type!r}")
 

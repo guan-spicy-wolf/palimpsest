@@ -1,26 +1,25 @@
 """Tool gateway — unified tool execution with transparent event capture.
 
-Part of the Runtime (skeleton).  All tools (builtin and evo) flow through
-the same ``UnifiedToolGateway`` which wraps ``ToolProvider`` instances
-with transparent event emission.
-
-``bash`` and ``spawn`` are runtime-embedded builtin tools implemented as
-a ``ToolProvider``.  They are added by default unless explicitly disabled.
+Part of the Runtime (skeleton). All tools (builtin and evo) flow through
+the same ``UnifiedToolGateway`` which wraps pure functions with transparent
+event emission.
 """
 
 from __future__ import annotations
 
+import importlib.util
+import inspect
 import subprocess
 import time
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, get_type_hints
 
 from loguru import logger
 
 from palimpsest.config import ToolsConfig
 from palimpsest.events import SpawnRequestData, ToolExecData, ToolResultData
 from palimpsest.runtime.event_gateway import EventGateway
-from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
 
 
 @dataclass
@@ -30,215 +29,237 @@ class ToolResult:
     terminal: bool = False
 
 
-class ToolGateway(ABC):
-    """Abstract tool gateway."""
+# ---------------------------------------------------------------------------
+# Introspection & @tool decorator
+# ---------------------------------------------------------------------------
 
-    @abstractmethod
-    def execute(self, name: str, call_id: str, args: dict, workspace: str) -> ToolResult:
-        pass
+def _python_type_to_json_type(py_type: Any) -> str:
+    if py_type == str: return "string"
+    if py_type == int: return "integer"
+    if py_type == float: return "number"
+    if py_type == bool: return "boolean"
+    if py_type == list: return "array"
+    if py_type == dict: return "object"
+    return "string"
 
-    @abstractmethod
-    def schema(self) -> list[dict]:
-        pass
+
+def _function_to_schema(func: Callable) -> dict:
+    """Generate JSON schema from function signature and docstring."""
+    sig = inspect.signature(func)
+    hints = get_type_hints(func)
+    
+    doc = inspect.getdoc(func) or ""
+    description = doc.split("\n\n")[0].strip() if doc else func.__name__
+
+    properties = {}
+    required = []
+
+    # Exclude injected runtime dependencies from schema
+    injected_args = {"workspace", "gateway"}
+
+    for name, param in sig.parameters.items():
+        if name in injected_args:
+            continue
+            
+        py_type = hints.get(name, str)
+        json_type = _python_type_to_json_type(py_type)
+        
+        prop = {"type": json_type}
+        # In a more advanced implementation we could parse the Args: section of docstring
+        # for param descriptions. For now, we omit individual param descriptions.
+        properties[name] = prop
+        
+        if param.default == inspect.Parameter.empty:
+            required.append(name)
+
+    return {
+        "type": "function",
+        "function": {
+            "name": func.__name__,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+        },
+    }
+
+
+def tool(func: Callable) -> Callable:
+    """Decorator to mark a function as a tool and generate its schema."""
+    func.__is_tool__ = True
+    func.__tool_schema__ = _function_to_schema(func)
+    return func
 
 
 # ---------------------------------------------------------------------------
-# Builtin tool schemas (used by BuiltinToolProvider)
+# Built-in tools
 # ---------------------------------------------------------------------------
 
-BUILTIN_TOOL_SCHEMAS = {
-    "bash": {
-        "type": "function",
-        "function": {
-            "name": "bash",
-            "description": "Run a bash command in the workspace directory. Returns stdout+stderr.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "The bash command to run"},
-                },
-                "required": ["command"],
-            },
-        },
-    },
-    "spawn": {
-        "type": "function",
-        "function": {
-            "name": "spawn",
-            "description": (
-                "Request the Supervisor to spawn child tasks.  This emits a "
-                "spawn-request event; the Supervisor handles the actual "
-                "fork-join orchestration externally."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tasks": {
-                        "type": "array",
-                        "description": "List of child tasks to spawn",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "role": {
-                                    "type": "string",
-                                    "description": "Role name for the child task (default: 'default')",
-                                },
-                                "task": {
-                                    "type": "string",
-                                    "description": "Task description for the child",
-                                },
-                                "repo": {
-                                    "type": "string",
-                                    "description": "Target repo URL (optional, defaults to current)",
-                                },
-                            },
-                            "required": ["task"],
-                        },
-                    },
-                    "wait_for": {
-                        "type": "string",
-                        "enum": ["all_complete", "any_failed"],
-                        "description": "Trigger condition for resuming the parent (default: all_complete)",
-                    },
-                },
-                "required": ["tasks"],
-            },
-        },
-    },
-}
+@tool
+def bash(command: str, workspace: str) -> ToolResult:
+    """Run a bash command in the workspace directory. Returns stdout+stderr."""
+    # Timeout and output limit are managed practically here via kwargs if needed,
+    # but since this is pure function, we can hardcode safe defaults.
+    timeout = 60
+    output_limit = 4096
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=workspace,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return ToolResult(success=False, output=f"Command timed out ({timeout}s)")
+
+    output = (result.stdout or "") + (result.stderr or "")
+    return ToolResult(success=result.returncode == 0, output=output[:output_limit])
 
 
-class BuiltinToolProvider(ToolProvider):
-    """Runtime-embedded tools (bash, spawn) implemented as a ToolProvider.
-
-    ``bash`` executes commands locally.  ``spawn`` emits a spawn-request
-    event — it does NOT run child tasks.
+@tool
+def spawn(tasks: list, gateway: EventGateway, wait_for: str = "all_complete") -> ToolResult:
+    """Request the Supervisor to spawn child tasks.
+    
+    tasks: List of child tasks to spawn.
+    wait_for: Trigger condition ('all_complete' or 'any_failed').
     """
+    if not tasks:
+        return ToolResult(success=False, output="No tasks provided to spawn")
 
-    def __init__(self, config: ToolsConfig, gateway: EventGateway):
-        self._config = config
-        self._gateway = gateway
-        self._disabled = set(config.disabled_builtins)
+    gateway.emit(
+        SpawnRequestData(
+            tasks=tasks,
+            wait_for=wait_for,
+        )
+    )
 
-    def tools(self) -> list[ToolSpec]:
-        specs = []
-        for name, schema in BUILTIN_TOOL_SCHEMAS.items():
-            if name not in self._disabled:
-                fn = schema["function"]
-                specs.append(ToolSpec(
-                    name=fn["name"],
-                    description=fn["description"],
-                    parameters=fn["parameters"],
-                ))
-        return specs
+    return ToolResult(
+        success=True,
+        output=(
+            f"Spawn request emitted for {len(tasks)} child task(s) "
+            f"(wait_for={wait_for}). The Supervisor will handle orchestration."
+        ),
+    )
 
-    def as_provider_dict(self) -> dict[str, "BuiltinToolProvider"]:
-        """Return a dict mapping each tool name to this provider (for merging)."""
-        return {spec.name: self for spec in self.tools()}
 
-    def execute(self, name: str, args: dict, workspace: str) -> ToolResult:
-        if name in self._disabled:
-            return ToolResult(success=False, output=f"Tool '{name}' is disabled")
-        try:
-            if name == "bash":
-                return self._bash(args, workspace)
-            elif name == "spawn":
-                return self._spawn(args)
+# ---------------------------------------------------------------------------
+# Tool Loader
+# ---------------------------------------------------------------------------
+
+def _load_tool_functions(py_path: Path) -> dict[str, Callable]:
+    """Load a .py file in isolated scope and extract @tool functions."""
+    module_name = f"_evo_tools_{py_path.stem}"
+    spec = importlib.util.spec_from_file_location(module_name, py_path)
+    if spec is None or spec.loader is None:
+        return {}
+
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        logger.error(f"Failed to load tools from {py_path}: {exc}")
+        return {}
+
+    funcs = {}
+    for attr_name in dir(module):
+        attr = getattr(module, attr_name)
+        if callable(attr) and getattr(attr, "__is_tool__", False):
+            funcs[attr.__name__] = attr
+    return funcs
+
+
+def resolve_tool_functions(
+    evo_root: str | Path,
+    requested: list[str],
+) -> dict[str, Callable]:
+    """Scan evo/tools/*.py and return requested @tool functions."""
+    scan_dir = Path(evo_root) / "tools"
+    if not scan_dir.is_dir():
+        logger.warning(f"Tool directory not found: {scan_dir}")
+        return {}
+
+    requested_set = set(requested)
+    result: dict[str, Callable] = {}
+
+    for py_file in sorted(scan_dir.glob("*.py")):
+        if py_file.name.startswith("_"):
+            continue
+            
+        funcs = _load_tool_functions(py_file)
+        for name, func in funcs.items():
+            if name in requested_set:
+                result[name] = func
+
+    missing = requested_set - set(result.keys())
+    if missing:
+        logger.warning(f"Tools not found in {scan_dir}: {missing}")
+
+    return result
+
+
+def find_duplicate_tool_names(*dicts: dict[str, Callable]) -> list[str]:
+    """Return duplicate tool names across provider dicts."""
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for d in dicts:
+        for name in d:
+            if name in seen:
+                duplicates.add(name)
             else:
-                return ToolResult(success=False, output=f"Unknown builtin tool: {name}")
-        except Exception as exc:
-            logger.error(f"Tool {name} failed: {exc}")
-            return ToolResult(success=False, output=f"Tool error: {exc}")
-
-    def _bash(self, args: dict, workspace: str) -> ToolResult:
-        cfg = self._config.builtin.get("bash", {})
-        timeout = cfg.get("timeout", 60)
-        output_limit = cfg.get("output_limit", 4096)
-
-        try:
-            result = subprocess.run(
-                args["command"],
-                shell=True,
-                capture_output=True,
-                text=True,
-                cwd=workspace,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            return ToolResult(success=False, output=f"Command timed out ({timeout}s)")
-
-        output = (result.stdout or "") + (result.stderr or "")
-        return ToolResult(success=result.returncode == 0, output=output[:output_limit])
-
-    def _spawn(self, args: dict) -> ToolResult:
-        """Emit a spawn-request event. The Supervisor handles the rest."""
-        tasks = args.get("tasks", [])
-        if not tasks:
-            return ToolResult(success=False, output="No tasks provided to spawn")
-
-        wait_for = args.get("wait_for", "all_complete")
-
-        self._gateway.emit_spawn_request(
-            SpawnRequestData(
-                tasks=tasks,
-                wait_for=wait_for,
-            )
-        )
-
-        return ToolResult(
-            success=True,
-            output=(
-                f"Spawn request emitted for {len(tasks)} child task(s) "
-                f"(wait_for={wait_for}). The Supervisor will handle orchestration."
-            ),
-        )
+                seen.add(name)
+    return sorted(duplicates)
 
 
 # ---------------------------------------------------------------------------
-# Unified tool gateway — single execution path for all tools
+# Unified Tool Gateway
 # ---------------------------------------------------------------------------
 
-class UnifiedToolGateway(ToolGateway):
-    """Wraps ToolProvider instances into a single gateway with event capture.
-
-    All tools (builtin and evo) flow through this gateway. Event wrapping
-    (ToolExecData/ToolResultData) is handled once, here.
-    """
+class UnifiedToolGateway:
+    """Wraps pure tool functions into a single gateway with event capture."""
 
     def __init__(
         self,
-        providers: dict[str, ToolProvider],
+        config: ToolsConfig,
+        evo_root: Path,
+        requested_evo_tools: list[str],
         gateway: EventGateway,
     ):
-        self._providers = providers
         self._gateway = gateway
-        # Pre-build schema list
-        self._schemas: list[dict] = []
-        seen: set[str] = set()
-        for name, provider in providers.items():
-            if name in seen:
-                continue
-            for spec in provider.tools():
-                if spec.name == name:
-                    self._schemas.append({
-                        "type": "function",
-                        "function": {
-                            "name": spec.name,
-                            "description": spec.description,
-                            "parameters": spec.parameters,
-                        },
-                    })
-                    seen.add(name)
+        
+        # Load builtins
+        disabled = set(config.disabled_builtins)
+        self._functions: dict[str, Callable] = {}
+        
+        if "bash" not in disabled:
+            self._functions["bash"] = bash
+        if "spawn" not in disabled:
+            self._functions["spawn"] = spawn
+            
+        # Load evo tools
+        evo_funcs = resolve_tool_functions(evo_root, requested_evo_tools)
+        
+        dups = find_duplicate_tool_names(self._functions, evo_funcs)
+        if dups:
+            raise ValueError("Duplicate tool names configured: " + ", ".join(dups))
+            
+        self._functions.update(evo_funcs)
+        
+        # Pre-build schemas
+        self._schemas = [func.__tool_schema__ for func in self._functions.values()]
 
     def schema(self) -> list[dict]:
         return self._schemas
 
     def execute(self, name: str, call_id: str, args: dict, workspace: str) -> ToolResult:
-        provider = self._providers.get(name)
-        if not provider:
+        func = self._functions.get(name)
+        if not func:
             return ToolResult(success=False, output=f"Unknown tool: {name}")
 
-        self._gateway.emit_tool_exec(
+        self._gateway.emit(
             ToolExecData(
                 tool_name=name,
                 tool_call_id=call_id,
@@ -248,14 +269,27 @@ class UnifiedToolGateway(ToolGateway):
 
         start = time.monotonic_ns()
         try:
-            result = provider.execute(name, args, workspace)
+            # Inject runtime dependencies if the tool requested them
+            sig = inspect.signature(func)
+            kwargs = dict(args)
+            if "workspace" in sig.parameters:
+                kwargs["workspace"] = workspace
+            if "gateway" in sig.parameters and getattr(func, "__module__", "").startswith("palimpsest.runtime"):
+                kwargs["gateway"] = self._gateway
+
+            result = func(**kwargs)
+            
+            # Allow pure functions to return strings directly instead of ToolResult
+            if not isinstance(result, ToolResult):
+                result = ToolResult(success=True, output=str(result))
+                
         except Exception as exc:
             logger.error(f"Tool {name} raised: {exc}")
             result = ToolResult(success=False, output=f"Tool error: {exc}")
 
         duration_ms = (time.monotonic_ns() - start) // 1_000_000
 
-        self._gateway.emit_tool_result(
+        self._gateway.emit(
             ToolResultData(
                 tool_name=name,
                 tool_call_id=call_id,
@@ -266,17 +300,3 @@ class UnifiedToolGateway(ToolGateway):
         )
 
         return result
-
-
-def find_duplicate_tool_names(providers: dict[str, ToolProvider], *more: dict[str, ToolProvider]) -> list[str]:
-    """Return duplicate tool names across provider dicts."""
-    all_dicts = [providers] + list(more)
-    seen: set[str] = set()
-    duplicates: set[str] = set()
-    for d in all_dicts:
-        for name in d:
-            if name in seen:
-                duplicates.add(name)
-            else:
-                seen.add(name)
-    return sorted(duplicates)

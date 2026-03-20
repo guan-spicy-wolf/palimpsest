@@ -7,7 +7,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from palimpsest.config import EventStoreConfig
-from palimpsest.events import EVENT_TYPES
+from palimpsest.events import BaseEvent
 
 
 class EventEmitter:
@@ -34,11 +34,11 @@ class EventEmitter:
         if self._noop:
             return None
 
-        event_type = EVENT_TYPES.get(type(event_data))
-        if not event_type:
-            logger.warning(f"Unknown event type: {type(event_data)}")
+        if not hasattr(event_data, "event_type"):
+            logger.warning(f"Event missing event_type: {type(event_data)}")
             return None
 
+        event_type = event_data.event_type
         payload = {
             "source_id": self._config.source_id,
             "type": event_type,
@@ -53,28 +53,6 @@ class EventEmitter:
             logger.warning(f"Failed to emit event {event_type}: {exc}")
             return None
 
-    def recent_events(
-        self, limit: int = 10, *, job_id: str | None = None
-    ) -> list[dict]:
-        """Get recent events from this source, optionally scoped to a job."""
-        if self._noop:
-            return []
-
-        params: dict = {
-            "source": self._config.source_id,
-            "limit": limit,
-            "order": "desc",
-        }
-        if job_id:
-            params["job_id"] = job_id
-
-        try:
-            response = self._client.get("/events", params=params)
-            response.raise_for_status()
-            return response.json()
-        except Exception as exc:
-            logger.warning(f"Failed to fetch recent events: {exc}")
-            return []
 
     def close(self):
         if self._client:

@@ -1,24 +1,17 @@
-from palimpsest.runtime.role_resolver import RoleResolver, JobSpec
+from palimpsest.runtime.role_resolver import RoleResolver, JobSpec, RoleDefinition
 from palimpsest.runtime.event_gateway import EventGateway
-from palimpsest.runtime.interfaces import ContextProvider, ToolProvider, ToolSpec
-from palimpsest.runtime.llm import LLMGateway, LiteLLMGateway, LLMResponse, ToolCall
-from palimpsest.runtime.tools import ToolGateway, BuiltinToolProvider, UnifiedToolGateway, ToolResult
-from palimpsest.runtime.tool_loader import resolve_tool_providers
+from palimpsest.runtime.llm import LLMGateway, UnifiedLLMGateway, LLMResponse, ToolCall
+from palimpsest.runtime.tools import UnifiedToolGateway, ToolResult
 
 __all__ = [
     "RoleResolver",
     "JobSpec",
+    "RoleDefinition",
     "EventGateway",
-    "ContextProvider",
-    "ToolProvider",
-    "ToolSpec",
     "LLMGateway",
-    "LiteLLMGateway",
+    "UnifiedLLMGateway",
     "LLMResponse",
     "ToolCall",
-    "ToolGateway",
-    "BuiltinToolProvider",
     "UnifiedToolGateway",
     "ToolResult",
-    "resolve_tool_providers",
 ]

@@ -26,7 +26,8 @@ def setup_workspace(
     events so the runner does not have to.
     """
     if gateway:
-        gateway.emit_stage_transition("init", "workspace")
+        from palimpsest.events import StageTransitionData
+        gateway.emit(StageTransitionData(from_stage="init", to_stage="workspace"))
 
     workspace_path = tempfile.mkdtemp(prefix="palimpsest-")
     logger.info(f"Created workspace: {workspace_path}")
@@ -65,7 +66,7 @@ def setup_workspace(
 
     if gateway:
         base_sha = _read_head_sha(workspace_path)
-        gateway.emit_job_started(
+        gateway.emit(
             JobStartedData(
                 workspace_path=workspace_path,
                 evo_sha=evo_sha,

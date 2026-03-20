@@ -3,7 +3,7 @@ from __future__ import annotations
 from loguru import logger
 
 from palimpsest.runtime.llm import LLMGateway
-from palimpsest.runtime.tools import ToolGateway
+from palimpsest.runtime.tools import UnifiedToolGateway
 
 
 def run_interaction_loop(
@@ -11,7 +11,7 @@ def run_interaction_loop(
     context: dict,
     workspace_path: str,
     llm: LLMGateway,
-    tools: ToolGateway,
+    tools: UnifiedToolGateway,
     max_iterations: int,
     messages: list[dict] | None = None,
     user_prompt: str | None = None,

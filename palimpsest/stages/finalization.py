@@ -34,7 +34,7 @@ def finalize_workspace_after_job(
         message = f"Failed to clean up workspace {workspace_path}: {exc}"
         logger.warning(message)
         if gateway:
-            gateway.emit_runtime_issue(
+            gateway.emit(
                 RuntimeIssueData(
                     stage="cleanup",
                     fatal=False,

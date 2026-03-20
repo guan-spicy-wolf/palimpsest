@@ -1,30 +1,44 @@
 """Role resolver — reads Role definitions from the evolvable repository.
 
-A Role is a convenience template used only at the plan/spawn stage.
-``RoleResolver.resolve()`` expands a role name into a ``JobSpec`` — the
-flat, self-contained execution configuration that the runtime consumes.
-After expansion the role name is no longer needed; the runtime operates
-solely on the ``JobSpec``.
-
-Roles support single-level inheritance via the ``inherits`` field.
+A Role is a convenience definition used only at the plan/spawn stage.
+``RoleResolver.resolve()`` extracts a ``RoleDefinition`` object from a `.py` file
+and expands it into a ``JobSpec`` — the flat, self-contained execution configuration
+that the runtime consumes. After expansion the role object is no longer needed;
+the runtime operates solely on the ``JobSpec``.
 """
 
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-import yaml
+from loguru import logger
+
+
+@dataclass
+class RoleDefinition:
+    """Agent role definition natively composed in Python by evo developers.
+    
+    This replaces the legacy YAML configurations.
+    """
+    name: str
+    # Either inline markdown text, or a relative path (e.g., "prompts/default.md")
+    prompt: str
+    # List of context sections mapped to @context_provider functions
+    contexts: list[dict[str, Any]] = field(default_factory=list)
+    # List of @tool function names available to this agent
+    tools: list[str] = field(default_factory=list)
 
 
 @dataclass
 class JobSpec:
     """Fully resolved execution specification consumed by the runtime.
 
-    ``tools`` is a list of tool names to load from evo/tools/*.yaml.
+    ``tools`` is a list of tool names to load from evo/tools/*.py.
     Runtime builtins (bash, spawn) are always implicitly available.
     """
-
     prompt: str
     context_template: dict
     tools: list[str] = field(default_factory=list)
@@ -38,28 +52,24 @@ class RoleResolver:
         self._root = Path(evo_root)
 
     def resolve(self, role_name: str) -> JobSpec:
-        """Expand a role template into a flat JobSpec."""
-        role_data = self._load_role(role_name)
+        """Expand a Python-defined role into a flat JobSpec."""
+        role_def = self._load_role(role_name)
 
-        # Handle single-level inheritance
-        if "inherits" in role_data:
-            parent_data = self._load_role(role_data["inherits"])
-            role_data = self._merge(parent_data, role_data)
+        prompt_text = role_def.prompt
+        # If it looks like a path and the file exists, read its contents
+        if prompt_text.endswith(".md") or prompt_text.endswith(".txt"):
+            potential_path = self._root / prompt_text
+            if potential_path.is_file():
+                prompt_text = potential_path.read_text(encoding="utf-8")
 
-        prompt_text = self._load_file(role_data["prompt"])
-        context_template = self._load_yaml(role_data.get("context", "contexts/default.yaml"))
-
-        # Unified tool list — just names, loaded by YamlToolLoader at runtime
-        tools = role_data.get("tools", [])
-        if isinstance(tools, dict):
-            # Backwards compat: flatten old {builtin: [...], custom: [...]} format
-            tools = tools.get("custom", [])
+        # Convert simple list of dicts to the legacy section format expected by the runner
+        context_template = {"sections": role_def.contexts}
 
         return JobSpec(
             prompt=prompt_text,
             context_template=context_template,
-            tools=tools,
-            source_role=role_data.get("name", role_name),
+            tools=list(role_def.tools),
+            source_role=role_def.name,
         )
 
     def list_roles(self) -> list[str]:
@@ -67,29 +77,31 @@ class RoleResolver:
         roles_dir = self._root / "roles"
         if not roles_dir.exists():
             return []
-        return [p.stem for p in roles_dir.glob("*.yaml")]
+        return [p.stem for p in roles_dir.glob("*.py") if not p.name.startswith("_")]
 
-    def _load_role(self, name: str) -> dict:
-        path = self._root / "roles" / f"{name}.yaml"
-        if not path.exists():
-            raise FileNotFoundError(f"Role not found: {name}")
-        return yaml.safe_load(path.read_text()) or {}
+    def _load_role(self, name: str) -> RoleDefinition:
+        """Dynamically load the role module and extract the RoleDefinition instance."""
+        py_path = self._root / "roles" / f"{name}.py"
+        if not py_path.exists():
+            raise FileNotFoundError(f"Role definition not found: {name} (expected {py_path})")
 
-    def _load_file(self, rel_path: str) -> str:
-        path = self._root / rel_path
-        if not path.exists():
-            raise FileNotFoundError(f"File not found in evolvable repo: {rel_path}")
-        return path.read_text()
+        module_name = f"_evo_roles_{name}"
+        spec = importlib.util.spec_from_file_location(module_name, py_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Could not load role module from {py_path}")
 
-    def _load_yaml(self, rel_path: str) -> dict:
-        return yaml.safe_load(self._load_file(rel_path)) or {}
+        module = importlib.util.module_from_spec(spec)
+        try:
+            # Isolated execution scope without polluting sys.modules
+            spec.loader.exec_module(module)
+        except Exception as exc:
+            logger.error(f"Failed to execute role module {py_path}: {exc}")
+            raise RuntimeError(f"Error loading role '{name}': {exc}") from exc
 
-    @staticmethod
-    def _merge(parent: dict, child: dict) -> dict:
-        """Merge child role onto parent. Child fields override parent."""
-        merged = {**parent}
-        for key, value in child.items():
-            if key == "inherits":
-                continue
-            merged[key] = value
-        return merged
+        # Locate the first RoleDefinition instance in the module
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if isinstance(attr, RoleDefinition):
+                return attr
+
+        raise ValueError(f"No RoleDefinition instance found in {py_path}. Please export one.")
