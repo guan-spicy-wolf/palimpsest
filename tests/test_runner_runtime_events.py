@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 import pytest
 
@@ -31,7 +31,6 @@ def _base_patches(emitter, tmp_path, **overrides):
     defaults = {
         "palimpsest.runner.EventEmitter": MagicMock(return_value=emitter),
         "palimpsest.runner._read_evo_sha": MagicMock(return_value="abc123"),
-        "palimpsest.runner._read_head_sha": MagicMock(return_value="def456"),
         "palimpsest.runner.setup_workspace": MagicMock(return_value=str(tmp_path)),
         "palimpsest.runner.build_context": MagicMock(return_value={"system": "sys", "task": "task"}),
         "palimpsest.runner.LiteLLMGateway": MagicMock(),
@@ -75,26 +74,29 @@ def test_duplicate_tool_names_emit_runtime_issue_and_job_failed(tmp_path):
     assert any(isinstance(event, JobFailedData) and "dup_tool" in event.error and event.code == "duplicate_tool_name" for event in emitter.events)
 
 
-def test_cleanup_issue_emits_runtime_issue(tmp_path):
+def test_cleanup_issue_calls_finalize_with_gateway(tmp_path):
+    """Verify finalize_workspace_after_job is called with the gateway so it can emit events."""
     emitter = RecordingEmitter()
     config = JobConfig(task="x")
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
 
+    finalize_mock = MagicMock(return_value="cleanup boom")
     patches = _base_patches(emitter, tmp_path)
     patches["palimpsest.runner.run_interaction_loop"] = MagicMock(return_value={"status": "success", "summary": "ok", "messages": []})
     patches["palimpsest.runner.git.Repo"] = MagicMock()
     patches["palimpsest.runner.find_publication_issues"] = MagicMock(return_value=[])
     patches["palimpsest.runner.publish_results"] = MagicMock(return_value="branch:sha")
-    patches["palimpsest.runner.finalize_workspace_after_job"] = MagicMock(return_value="cleanup boom")
+    patches["palimpsest.runner.finalize_workspace_after_job"] = finalize_mock
 
     with _apply_patches(patches)[0]:
         _run_job_from_spec(config, spec, tmp_path)
 
     assert any(isinstance(event, JobCompletedData) for event in emitter.events)
-    assert any(
-        isinstance(event, RuntimeIssueData) and event.stage == "cleanup" and "cleanup boom" in event.details.get("error", "")
-        for event in emitter.events
-    )
+    # Verify finalize was called with gateway kwarg (stage handles event emission)
+    finalize_mock.assert_called_once()
+    _, kwargs = finalize_mock.call_args
+    assert "gateway" in kwargs
+    assert kwargs["gateway"] is not None
 
 
 def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
@@ -146,14 +148,16 @@ def test_publication_guardrail_can_fail_without_retry(tmp_path):
     assert any(isinstance(event, JobFailedData) and event.code == "publication_guardrail" for event in emitter.events)
 
 
-def test_job_started_carries_evo_sha_and_base_sha(tmp_path):
+def test_job_started_emitted_by_setup_workspace(tmp_path):
+    """Verify setup_workspace is called with gateway and evo_sha so it can emit JobStartedData."""
     emitter = RecordingEmitter()
     config = JobConfig(task="x")
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
 
+    setup_mock = MagicMock(return_value=str(tmp_path))
     patches = _base_patches(emitter, tmp_path)
     patches["palimpsest.runner._read_evo_sha"] = MagicMock(return_value="evo_abc123")
-    patches["palimpsest.runner._read_head_sha"] = MagicMock(return_value="base_def456")
+    patches["palimpsest.runner.setup_workspace"] = setup_mock
     patches["palimpsest.runner.run_interaction_loop"] = MagicMock(return_value={"status": "success", "summary": "ok", "messages": []})
     patches["palimpsest.runner.git.Repo"] = MagicMock()
     patches["palimpsest.runner.find_publication_issues"] = MagicMock(return_value=[])
@@ -162,11 +166,11 @@ def test_job_started_carries_evo_sha_and_base_sha(tmp_path):
     with _apply_patches(patches)[0]:
         _run_job_from_spec(config, spec, tmp_path)
 
-    started = [e for e in emitter.events if isinstance(e, JobStartedData)]
-    assert len(started) == 1
-    assert started[0].evo_sha == "evo_abc123"
-    assert started[0].base_sha == "base_def456"
-    assert started[0].workspace_path == str(tmp_path)
+    # Verify setup_workspace was called with gateway and evo_sha
+    setup_mock.assert_called_once()
+    _, kwargs = setup_mock.call_args
+    assert kwargs["evo_sha"] == "evo_abc123"
+    assert kwargs["gateway"] is not None
 
 
 def test_job_timeout_emits_failed_with_timeout_code(tmp_path):

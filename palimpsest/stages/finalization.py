@@ -7,16 +7,20 @@ from pathlib import Path
 import git
 from loguru import logger
 
+from palimpsest.events import RuntimeIssueData
+from palimpsest.runtime.event_gateway import EventGateway
+
 
 def finalize_workspace_after_job(
     workspace_path: str,
+    gateway: EventGateway | None = None,
     *,
     keep_env: str = "PALIMPSEST_KEEP_WORKSPACE",
 ) -> str | None:
     """Best-effort cleanup for one-shot sandbox jobs.
 
-    Default keeps behavior conservative in case the supervisor/container
-    already manages cleanup. Set keep_env=1 to force retention.
+    When *gateway* is provided, emits a runtime-issue event on failure
+    so the runner does not have to.
     """
     if os.environ.get(keep_env, "").strip() in {"1", "true", "yes"}:
         logger.info(f"Keeping workspace due to {keep_env}=1: {workspace_path}")
@@ -29,6 +33,15 @@ def finalize_workspace_after_job(
     except Exception as exc:
         message = f"Failed to clean up workspace {workspace_path}: {exc}"
         logger.warning(message)
+        if gateway:
+            gateway.emit_runtime_issue(
+                RuntimeIssueData(
+                    stage="cleanup",
+                    fatal=False,
+                    code="cleanup_failed",
+                    error=message,
+                )
+            )
         return message
 
 
