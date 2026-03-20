@@ -1,49 +1,40 @@
 import textwrap
 from pathlib import Path
 
+from palimpsest.runtime.contexts import resolve_context_functions
+
 
 def test_resolve_context_discovers_providers(tmp_path):
-    from palimpsest.stages.context import resolve_context_providers
-
     ctx_dir = tmp_path / "contexts"
     ctx_dir.mkdir()
-    (ctx_dir / "__init__.py").write_text("")
     (ctx_dir / "custom.py").write_text(textwrap.dedent("""\
-        from palimpsest.runtime.interfaces import ContextProvider
+        from palimpsest.runtime.contexts import context_provider
 
-        class CustomSection(ContextProvider):
-            @property
-            def section_type(self) -> str:
-                return "custom"
-            def render(self, job_id, workspace, section_config, runtime_deps=None):
-                return "## Custom\\nhello"
+        @context_provider("custom")
+        def custom_section(description: str = "Custom") -> str:
+            return "## Custom\\nhello"
     """))
 
-    providers = resolve_context_providers(tmp_path, ["custom"])
-    assert "custom" in providers
-    assert "hello" in providers["custom"].render("j1", "/tmp", {})
+    registry = resolve_context_functions(tmp_path, ["custom"])
+    assert "custom" in registry
+    assert "hello" in registry["custom"]()
 
 
 def test_resolve_context_ignores_unrequested(tmp_path):
-    from palimpsest.stages.context import resolve_context_providers
-
     ctx_dir = tmp_path / "contexts"
     ctx_dir.mkdir()
-    (ctx_dir / "__init__.py").write_text("")
     (ctx_dir / "two.py").write_text(textwrap.dedent("""\
-        from palimpsest.runtime.interfaces import ContextProvider
+        from palimpsest.runtime.contexts import context_provider
 
-        class AProvider(ContextProvider):
-            @property
-            def section_type(self): return "a"
-            def render(self, job_id, workspace, section_config, runtime_deps=None): return "a"
+        @context_provider("a")
+        def section_a() -> str:
+            return "a"
 
-        class BProvider(ContextProvider):
-            @property
-            def section_type(self): return "b"
-            def render(self, job_id, workspace, section_config, runtime_deps=None): return "b"
+        @context_provider("b")
+        def section_b() -> str:
+            return "b"
     """))
 
-    providers = resolve_context_providers(tmp_path, ["a"])
-    assert "a" in providers
-    assert "b" not in providers
+    registry = resolve_context_functions(tmp_path, ["a"])
+    assert "a" in registry
+    assert "b" not in registry
