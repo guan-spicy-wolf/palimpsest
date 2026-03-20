@@ -98,12 +98,17 @@ def tool(func: Callable) -> Callable:
 # ---------------------------------------------------------------------------
 
 @tool
-def bash(command: str, workspace: str) -> ToolResult:
+def bash(command: str, workspace: str, config: ToolsConfig | None = None) -> ToolResult:
     """Run a bash command in the workspace directory. Returns stdout+stderr."""
-    # Timeout and output limit are managed practically here via kwargs if needed,
-    # but since this is pure function, we can hardcode safe defaults.
-    timeout = 60
-    output_limit = 4096
+    # Get timeout and output limit from config or use defaults
+    if config and "bash" in config.builtin:
+        tool_config = config.builtin["bash"]
+        timeout = tool_config.get("timeout", 60)
+        output_limit = tool_config.get("output_limit", 4096)
+    else:
+        timeout = 60
+        output_limit = 4096
+        
     try:
         result = subprocess.run(
             command,
@@ -229,13 +234,17 @@ class UnifiedToolGateway:
         gateway: EventGateway,
     ):
         self._gateway = gateway
+        self._config = config
         
         # Load builtins
         disabled = set(config.disabled_builtins)
         self._functions: dict[str, Callable] = {}
         
         if "bash" not in disabled:
-            self._functions["bash"] = bash
+            # Wrap bash with config injection
+            def bash_with_config(command: str, workspace: str) -> ToolResult:
+                return bash(command, workspace, config=self._config)
+            self._functions["bash"] = bash_with_config
         if "spawn" not in disabled:
             self._functions["spawn"] = spawn
             

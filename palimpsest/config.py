@@ -21,6 +21,19 @@ class LLMConfig:
     api_key_env: str = "ANTHROPIC_API_KEY"
     max_iterations: int = 50
     temperature: float = 0.0
+    # Generation parameters
+    max_tokens: int = 4096
+    top_p: float | None = None
+    frequency_penalty: float | None = None
+    presence_penalty: float | None = None
+    # Retry configuration (exponential backoff)
+    max_retries: int = 3
+    retry_initial_delay: float = 1.0  # seconds
+    retry_max_delay: float = 60.0  # seconds
+    retry_backoff_factor: float = 2.0
+    # Anthropic-specific cache control
+    anthropic_cache_system: bool = True
+    anthropic_cache_tools: bool = True
 
 
 @dataclass

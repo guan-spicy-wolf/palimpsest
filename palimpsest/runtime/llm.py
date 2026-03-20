@@ -20,6 +20,7 @@ from loguru import logger
 from palimpsest.config import LLMConfig
 from palimpsest.events import LLMRequestData, LLMResponseData
 from palimpsest.runtime.event_gateway import EventGateway
+from palimpsest.runtime.retry_utils import retry_with_exponential_backoff
 
 
 @dataclass
@@ -117,11 +118,30 @@ class UnifiedLLMGateway(LLMGateway):
             "messages": messages,
             "temperature": self._config.temperature,
         }
+        
+        # Add optional generation parameters
+        if self._config.max_tokens:
+            kwargs["max_tokens"] = self._config.max_tokens
+        if self._config.top_p is not None:
+            kwargs["top_p"] = self._config.top_p
+        if self._config.frequency_penalty is not None:
+            kwargs["frequency_penalty"] = self._config.frequency_penalty
+        if self._config.presence_penalty is not None:
+            kwargs["presence_penalty"] = self._config.presence_penalty
+        
         if oai_tools:
             kwargs["tools"] = oai_tools
             kwargs["tool_choice"] = "auto"
 
-        raw_response = client.chat.completions.create(**kwargs)
+        # Execute with retry
+        raw_response = retry_with_exponential_backoff(
+            client.chat.completions.create,
+            max_retries=self._config.max_retries,
+            initial_delay=self._config.retry_initial_delay,
+            max_delay=self._config.retry_max_delay,
+            backoff_factor=self._config.retry_backoff_factor,
+            **kwargs
+        )
 
         choice = raw_response.choices[0]
         msg = choice.message
@@ -224,32 +244,54 @@ class UnifiedLLMGateway(LLMGateway):
             else:
                 compressed.append(am)
 
-        # 3. Translate tool schemas
+        # 3. Translate tool schemas with optional cache_control
         anth_tools = []
         for t in tools_schema:
-            anth_tools.append({
+            tool_def = {
                 "name": t["function"]["name"],
                 "description": t["function"].get("description", ""),
                 "input_schema": t["function"].get("parameters", {}),
-            })
+            }
+            # Add cache_control if enabled
+            if self._config.anthropic_cache_tools:
+                tool_def["cache_control"] = {"type": "ephemeral"}
+            anth_tools.append(tool_def)
 
         kwargs: dict[str, Any] = {
             "model": self._config.model,
             "messages": compressed,
             "temperature": self._config.temperature,
-            "max_tokens": 4096, # Required by Anthropic API
+            "max_tokens": self._config.max_tokens,  # Required by Anthropic API
         }
         
         system_text = system_text.strip()
         if system_text:
-            kwargs["system"] = system_text
+            system_content: Any = system_text
+            # Add cache_control to system message if enabled
+            if self._config.anthropic_cache_system:
+                system_content = [
+                    {
+                        "type": "text",
+                        "text": system_text,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ]
+            kwargs["system"] = system_content
             
         if anth_tools:
             kwargs["tools"] = anth_tools
             # Anthropic tool_choice
             kwargs["tool_choice"] = {"type": "auto"}
 
-        raw_response = client.messages.create(**kwargs)
+        # Execute with retry
+        raw_response = retry_with_exponential_backoff(
+            client.messages.create,
+            max_retries=self._config.max_retries,
+            initial_delay=self._config.retry_initial_delay,
+            max_delay=self._config.retry_max_delay,
+            backoff_factor=self._config.retry_backoff_factor,
+            **kwargs
+        )
 
         # Transform response back to generic format
         text = ""
