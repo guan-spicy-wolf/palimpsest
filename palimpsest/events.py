@@ -39,6 +39,8 @@ class ToolResultData(BaseModel):
 class JobStartedData(BaseModel):
     job_id: str
     workspace_path: str
+    evo_sha: str = ""
+    base_sha: str = ""
 
 
 class JobCompletedData(BaseModel):
@@ -52,6 +54,7 @@ class JobFailedData(BaseModel):
     job_id: str
     error: str
     traceback: str | None = None
+    code: str = ""
 
 
 class RuntimeIssueData(BaseModel):

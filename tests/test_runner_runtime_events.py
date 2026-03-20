@@ -3,9 +3,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from palimpsest.config import JobConfig
-from palimpsest.events import JobCompletedData, JobFailedData, RuntimeIssueData
+from palimpsest.events import JobCompletedData, JobFailedData, JobStartedData, RuntimeIssueData
 from palimpsest.runtime.role_resolver import JobSpec
-from palimpsest.runner import _run_job_from_spec
+from palimpsest.runner import ControlledJobFailure, _run_job_from_spec
 
 
 class RecordingEmitter:
@@ -31,7 +31,8 @@ def test_duplicate_tool_names_emit_runtime_issue_and_job_failed(tmp_path):
     fake_evo = MagicMock()
 
     with patch("palimpsest.runner.EventEmitter", return_value=emitter), \
-         patch("palimpsest.runner._log_evo_checkout"), \
+         patch("palimpsest.runner._read_evo_sha", return_value="abc123"), \
+         patch("palimpsest.runner._read_head_sha", return_value="def456"), \
          patch("palimpsest.runner.setup_workspace", return_value=str(tmp_path)), \
          patch("palimpsest.runner.build_context", return_value={"system": "sys", "task": "task"}), \
          patch("palimpsest.runner.LiteLLMGateway"), \
@@ -44,7 +45,7 @@ def test_duplicate_tool_names_emit_runtime_issue_and_job_failed(tmp_path):
             _run_job_from_spec(config, spec, tmp_path)
 
     assert any(isinstance(event, RuntimeIssueData) and event.stage == "interaction" for event in emitter.events)
-    assert any(isinstance(event, JobFailedData) and "dup_tool" in event.error for event in emitter.events)
+    assert any(isinstance(event, JobFailedData) and "dup_tool" in event.error and event.code == "duplicate_tool_name" for event in emitter.events)
 
 
 def test_cleanup_issue_emits_runtime_issue(tmp_path):
@@ -54,7 +55,8 @@ def test_cleanup_issue_emits_runtime_issue(tmp_path):
     fake_repo = MagicMock()
 
     with patch("palimpsest.runner.EventEmitter", return_value=emitter), \
-         patch("palimpsest.runner._log_evo_checkout"), \
+         patch("palimpsest.runner._read_evo_sha", return_value="abc123"), \
+         patch("palimpsest.runner._read_head_sha", return_value="def456"), \
          patch("palimpsest.runner.setup_workspace", return_value=str(tmp_path)), \
          patch("palimpsest.runner.build_context", return_value={"system": "sys", "task": "task"}), \
          patch("palimpsest.runner.LiteLLMGateway"), \
@@ -87,7 +89,8 @@ def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
     ]
 
     with patch("palimpsest.runner.EventEmitter", return_value=emitter), \
-         patch("palimpsest.runner._log_evo_checkout"), \
+         patch("palimpsest.runner._read_evo_sha", return_value="abc123"), \
+         patch("palimpsest.runner._read_head_sha", return_value="def456"), \
          patch("palimpsest.runner.setup_workspace", return_value=str(tmp_path)), \
          patch("palimpsest.runner.build_context", return_value={"system": "sys", "task": "task"}), \
          patch("palimpsest.runner.LiteLLMGateway"), \
@@ -116,7 +119,8 @@ def test_publication_guardrail_can_fail_without_retry(tmp_path):
     fake_repo = MagicMock()
 
     with patch("palimpsest.runner.EventEmitter", return_value=emitter), \
-         patch("palimpsest.runner._log_evo_checkout"), \
+         patch("palimpsest.runner._read_evo_sha", return_value="abc123"), \
+         patch("palimpsest.runner._read_head_sha", return_value="def456"), \
          patch("palimpsest.runner.setup_workspace", return_value=str(tmp_path)), \
          patch("palimpsest.runner.build_context", return_value={"system": "sys", "task": "task"}), \
          patch("palimpsest.runner.LiteLLMGateway"), \
@@ -136,4 +140,66 @@ def test_publication_guardrail_can_fail_without_retry(tmp_path):
         isinstance(event, RuntimeIssueData) and event.stage == "publication" and event.fatal
         for event in emitter.events
     )
-    assert any(isinstance(event, JobFailedData) for event in emitter.events)
+    assert any(isinstance(event, JobFailedData) and event.code == "publication_guardrail" for event in emitter.events)
+
+
+def test_job_started_carries_evo_sha_and_base_sha(tmp_path):
+    emitter = RecordingEmitter()
+    config = JobConfig(task="x")
+    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+    fake_repo = MagicMock()
+
+    with patch("palimpsest.runner.EventEmitter", return_value=emitter), \
+         patch("palimpsest.runner._read_evo_sha", return_value="evo_abc123"), \
+         patch("palimpsest.runner._read_head_sha", return_value="base_def456"), \
+         patch("palimpsest.runner.setup_workspace", return_value=str(tmp_path)), \
+         patch("palimpsest.runner.build_context", return_value={"system": "sys", "task": "task"}), \
+         patch("palimpsest.runner.LiteLLMGateway"), \
+         patch("palimpsest.runner.BuiltinToolGateway", return_value=MagicMock(schema=lambda: [])), \
+         patch("palimpsest.runner.resolve_tool_providers", return_value={}), \
+         patch("palimpsest.runner.EvoToolGateway", return_value=MagicMock(schema=lambda: [])), \
+         patch("palimpsest.runner.find_duplicate_tool_names", return_value=[]), \
+         patch("palimpsest.runner.run_interaction_loop", return_value={"status": "success", "summary": "ok", "messages": []}), \
+         patch("palimpsest.runner.git.Repo", return_value=fake_repo), \
+         patch("palimpsest.runner.find_publication_issues", return_value=[]), \
+         patch("palimpsest.runner.publish_results", return_value="branch:sha"), \
+         patch("palimpsest.runner.finalize_workspace_after_job", return_value=None):
+        _run_job_from_spec(config, spec, tmp_path)
+
+    started = [e for e in emitter.events if isinstance(e, JobStartedData)]
+    assert len(started) == 1
+    assert started[0].evo_sha == "evo_abc123"
+    assert started[0].base_sha == "base_def456"
+    assert started[0].workspace_path == str(tmp_path)
+
+
+def test_job_timeout_emits_failed_with_timeout_code(tmp_path):
+    import time as _time
+    emitter = RecordingEmitter()
+    config = JobConfig(task="x", timeout=1)
+    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+
+    def slow_interaction(*args, **kwargs):
+        _time.sleep(3)
+        return {"status": "success", "summary": "ok", "messages": []}
+
+    with patch("palimpsest.runner.EventEmitter", return_value=emitter), \
+         patch("palimpsest.runner._read_evo_sha", return_value="abc123"), \
+         patch("palimpsest.runner._read_head_sha", return_value="def456"), \
+         patch("palimpsest.runner.setup_workspace", return_value=str(tmp_path)), \
+         patch("palimpsest.runner.build_context", return_value={"system": "sys", "task": "task"}), \
+         patch("palimpsest.runner.LiteLLMGateway"), \
+         patch("palimpsest.runner.BuiltinToolGateway", return_value=MagicMock(schema=lambda: [])), \
+         patch("palimpsest.runner.resolve_tool_providers", return_value={}), \
+         patch("palimpsest.runner.EvoToolGateway", return_value=MagicMock(schema=lambda: [])), \
+         patch("palimpsest.runner.find_duplicate_tool_names", return_value=[]), \
+         patch("palimpsest.runner.run_interaction_loop", side_effect=slow_interaction), \
+         patch("palimpsest.runner.finalize_workspace_after_job", return_value=None):
+        with pytest.raises(ControlledJobFailure) as exc_info:
+            _run_job_from_spec(config, spec, tmp_path)
+        assert exc_info.value.code == "timeout"
+
+    assert any(
+        isinstance(e, JobFailedData) and e.code == "timeout"
+        for e in emitter.events
+    )

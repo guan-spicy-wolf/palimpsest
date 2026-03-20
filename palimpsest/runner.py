@@ -18,6 +18,7 @@ All events are emitted through the transparent EventGateway.
 
 from __future__ import annotations
 
+import signal
 import traceback
 import uuid
 from pathlib import Path
@@ -58,6 +59,10 @@ _EVO_DIR = "evo"
 class ControlledJobFailure(Exception):
     """Runtime-detected job failure that should not produce a traceback."""
 
+    def __init__(self, message: str, code: str = ""):
+        super().__init__(message)
+        self.code = code
+
 
 def run_job(config: JobConfig) -> None:
     """Resolve the role into a JobSpec and execute the four-stage pipeline."""
@@ -92,21 +97,29 @@ def _run_job_from_spec(
     emitter = EventEmitter(config.eventstore)
     gateway = EventGateway(emitter)
 
-    # Read current checkout SHA for informational logging only.
-    _log_evo_checkout(evo_path)
+    evo_sha = _read_evo_sha(evo_path)
+    logger.info(f"Starting job {job_id} (evo={evo_sha[:8] if evo_sha else '?'})")
 
-    logger.info(f"Starting job {job_id}")
+    # Job-level wall-clock timeout
+    _install_timeout(config.timeout)
 
     workspace: str | None = None
     try:
         # Stage 1: Workspace
-        gateway.emit_job_started(
-            JobStartedData(job_id=job_id, workspace_path="")
-        )
         gateway.emit_stage_transition(job_id, "init", "workspace")
 
         workspace = setup_workspace(
             job_id, config.workspace, config.publication.branch_prefix
+        )
+        base_sha = _read_head_sha(workspace)
+
+        gateway.emit_job_started(
+            JobStartedData(
+                job_id=job_id,
+                workspace_path=workspace,
+                evo_sha=evo_sha,
+                base_sha=base_sha,
+            )
         )
 
         # Stage 2: Context (using JobSpec's prompt and context template)
@@ -140,7 +153,7 @@ def _run_job_from_spec(
                     code="duplicate_tool_name",
                 )
             )
-            raise ControlledJobFailure(message)
+            raise ControlledJobFailure(message, code="duplicate_tool_name")
 
         tools = CompositeToolGateway([builtin_tools, evo_tools])
         interaction_messages: list[dict] | None = None
@@ -178,7 +191,7 @@ def _run_job_from_spec(
                     )
                 )
                 if not can_retry:
-                    raise ControlledJobFailure(message)
+                    raise ControlledJobFailure(message, code="publication_guardrail")
 
                 publication_recovery_attempts += 1
                 gateway.emit_stage_transition(job_id, "publication", "interaction")
@@ -208,9 +221,22 @@ def _run_job_from_spec(
         error_msg = str(exc)
         logger.error(f"Job {job_id} failed: {error_msg}")
         gateway.emit_job_failed(
-            JobFailedData(job_id=job_id, error=error_msg, traceback=None)
+            JobFailedData(job_id=job_id, error=error_msg, code=exc.code)
         )
         raise
+
+    except _JobTimeout:
+        logger.error(f"Job {job_id} timed out ({config.timeout}s)")
+        gateway.emit_job_failed(
+            JobFailedData(
+                job_id=job_id,
+                error=f"Job timed out after {config.timeout}s",
+                code="timeout",
+            )
+        )
+        raise ControlledJobFailure(
+            f"Job timed out after {config.timeout}s", code="timeout"
+        )
 
     except Exception as exc:
         error_msg = str(exc)
@@ -237,10 +263,34 @@ def _run_job_from_spec(
         gateway.close()
 
 
-def _log_evo_checkout(evo_path: Path) -> None:
-    """Log the current checkout SHA of the evolvable repo (informational)."""
+class _JobTimeout(Exception):
+    """Raised by the SIGALRM handler when the job wall-clock timeout expires."""
+
+
+def _timeout_handler(signum, frame):
+    raise _JobTimeout()
+
+
+def _install_timeout(seconds: int) -> None:
+    """Arm a SIGALRM-based wall-clock timeout. 0 means no limit."""
+    if seconds <= 0:
+        return
+    signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(seconds)
+
+
+def _read_evo_sha(evo_path: Path) -> str:
+    """Return the HEAD SHA of the evolvable repo, or empty string."""
     try:
-        repo = git.Repo(evo_path)
-        logger.info(f"Evolvable repo checkout: {repo.head.commit.hexsha[:8]}")
+        return git.Repo(evo_path).head.commit.hexsha
     except Exception:
         logger.debug("Could not read evolvable repo HEAD")
+        return ""
+
+
+def _read_head_sha(workspace: str) -> str:
+    """Return the HEAD SHA of the task repo workspace, or empty string."""
+    try:
+        return git.Repo(workspace).head.commit.hexsha
+    except Exception:
+        return ""
