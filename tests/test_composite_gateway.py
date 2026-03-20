@@ -1,46 +1,56 @@
 from unittest.mock import MagicMock
-from palimpsest.gateway.tools import (
-    CompositeToolGateway,
+from palimpsest.runtime.tools import (
+    UnifiedToolGateway,
     ToolResult,
     find_duplicate_tool_names,
 )
+from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
 
 
-def _make_gateway(names: list[str]) -> MagicMock:
-    gw = MagicMock()
-    gw.schema.return_value = [
-        {"type": "function", "function": {"name": n}} for n in names
-    ]
-    gw.execute.return_value = ToolResult(success=True, output="ok")
-    return gw
+class FakeProvider(ToolProvider):
+    def __init__(self, name: str):
+        self._name = name
+
+    def tools(self):
+        return [ToolSpec(name=self._name, description="fake", parameters={})]
+
+    def execute(self, name, args, workspace):
+        return ToolResult(success=True, output=f"ok from {name}")
 
 
-def test_composite_dispatches_to_correct_gateway():
-    gw_a = _make_gateway(["a"])
-    gw_b = _make_gateway(["b"])
-    composite = CompositeToolGateway([gw_a, gw_b])
+def test_unified_dispatches_to_correct_provider():
+    pa = FakeProvider("a")
+    pb = FakeProvider("b")
+    gw = UnifiedToolGateway({"a": pa, "b": pb}, MagicMock())
 
-    composite.execute("b", "call-1", {}, "/tmp")
-    gw_b.execute.assert_called_once()
-    gw_a.execute.assert_not_called()
-
-
-def test_composite_schema_merges_all():
-    gw_a = _make_gateway(["a"])
-    gw_b = _make_gateway(["b", "c"])
-    composite = CompositeToolGateway([gw_a, gw_b])
-
-    names = [s["function"]["name"] for s in composite.schema()]
-    assert names == ["a", "b", "c"]
+    result = gw.execute("b", "call-1", {}, "/tmp")
+    assert result.success
+    assert "ok from b" in result.output
 
 
-def test_composite_unknown_tool():
-    composite = CompositeToolGateway([_make_gateway(["a"])])
-    result = composite.execute("nonexistent", "x", {}, "/tmp")
+def test_unified_schema_merges_all():
+    pa = FakeProvider("a")
+    pb = FakeProvider("b")
+    gw = UnifiedToolGateway({"a": pa, "b": pb}, MagicMock())
+
+    names = [s["function"]["name"] for s in gw.schema()]
+    assert names == ["a", "b"]
+
+
+def test_unified_unknown_tool():
+    pa = FakeProvider("a")
+    gw = UnifiedToolGateway({"a": pa}, MagicMock())
+    result = gw.execute("nonexistent", "x", {}, "/tmp")
     assert not result.success
 
 
 def test_duplicate_tool_names_are_detected():
-    gw_a = _make_gateway(["a"])
-    gw_b = _make_gateway(["a"])
-    assert find_duplicate_tool_names([gw_a, gw_b]) == ["a"]
+    pa = FakeProvider("a")
+    pb = FakeProvider("a")
+    assert find_duplicate_tool_names({"a": pa}, {"a": pb}) == ["a"]
+
+
+def test_no_duplicates_when_disjoint():
+    pa = FakeProvider("a")
+    pb = FakeProvider("b")
+    assert find_duplicate_tool_names({"a": pa}, {"b": pb}) == []

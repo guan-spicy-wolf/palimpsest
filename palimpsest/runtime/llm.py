@@ -54,10 +54,9 @@ _LLM_RETRY_BASE_DELAY = 2  # seconds, exponential backoff: 2, 4, 8
 class LiteLLMGateway(LLMGateway):
     """LLM gateway using litellm with transparent event capture and retry."""
 
-    def __init__(self, config: LLMConfig, gateway: EventGateway, job_id: str):
+    def __init__(self, config: LLMConfig, gateway: EventGateway):
         self._config = config
         self._gateway = gateway
-        self._job_id = job_id
         self._iteration = 0
         self._api_key = os.environ.get(config.api_key_env, "")
 
@@ -67,7 +66,6 @@ class LiteLLMGateway(LLMGateway):
         # Transparent event: LLM request
         self._gateway.emit_llm_request(
             LLMRequestData(
-                job_id=self._job_id,
                 model=self._config.model,
                 messages_count=len(messages),
                 tools_count=len(tools_schema),
@@ -99,7 +97,6 @@ class LiteLLMGateway(LLMGateway):
         # Transparent event: LLM response
         self._gateway.emit_llm_response(
             LLMResponseData(
-                job_id=self._job_id,
                 model=self._config.model,
                 finish_reason=choice.finish_reason or "unknown",
                 input_tokens=getattr(response.usage, "prompt_tokens", 0) or 0,

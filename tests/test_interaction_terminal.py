@@ -1,5 +1,5 @@
 from unittest.mock import MagicMock
-from palimpsest.gateway.tools import ToolResult
+from palimpsest.runtime.tools import ToolResult
 from palimpsest.stages.interaction import run_interaction_loop
 
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from loguru import logger
 
-from palimpsest.gateway.llm import LLMGateway
-from palimpsest.gateway.tools import ToolGateway
+from palimpsest.runtime.llm import LLMGateway
+from palimpsest.runtime.tools import ToolGateway
 
 
 def run_interaction_loop(

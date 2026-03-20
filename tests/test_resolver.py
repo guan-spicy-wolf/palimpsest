@@ -2,7 +2,7 @@ import sys
 import textwrap
 from pathlib import Path
 from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
-from palimpsest.gateway.tools import ToolResult
+from palimpsest.runtime.tools import ToolResult
 
 
 def test_resolve_discovers_subclasses(tmp_path):
@@ -12,7 +12,7 @@ def test_resolve_discovers_subclasses(tmp_path):
     (tools_dir / "__init__.py").write_text("")
     (tools_dir / "greet.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
-        from palimpsest.gateway.tools import ToolResult
+        from palimpsest.runtime.tools import ToolResult
         class GreetProvider(ToolProvider):
             def tools(self):
                 return [ToolSpec(name="greet", description="Say hi", parameters={})]
@@ -36,7 +36,7 @@ def test_resolve_no_sys_modules_leak(tmp_path):
     (tools_dir / "__init__.py").write_text("")
     (tools_dir / "leak_check.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
-        from palimpsest.gateway.tools import ToolResult
+        from palimpsest.runtime.tools import ToolResult
         class LeakProvider(ToolProvider):
             def tools(self):
                 return [ToolSpec(name="leak", description="x", parameters={})]
@@ -62,7 +62,7 @@ def test_resolve_filters_to_requested_only(tmp_path):
     (tools_dir / "__init__.py").write_text("")
     (tools_dir / "multi.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
-        from palimpsest.gateway.tools import ToolResult
+        from palimpsest.runtime.tools import ToolResult
         class MultiProvider(ToolProvider):
             def tools(self):
                 return [
