@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 
 class LLMRequestData(BaseModel):
-    job_id: str
+    job_id: str = ""
     model: str
     messages_count: int
     tools_count: int
@@ -12,7 +12,7 @@ class LLMRequestData(BaseModel):
 
 
 class LLMResponseData(BaseModel):
-    job_id: str
+    job_id: str = ""
     model: str
     finish_reason: str
     input_tokens: int
@@ -21,14 +21,14 @@ class LLMResponseData(BaseModel):
 
 
 class ToolExecData(BaseModel):
-    job_id: str
+    job_id: str = ""
     tool_name: str
     tool_call_id: str
     arguments_preview: str
 
 
 class ToolResultData(BaseModel):
-    job_id: str
+    job_id: str = ""
     tool_name: str
     tool_call_id: str
     success: bool
@@ -37,36 +37,36 @@ class ToolResultData(BaseModel):
 
 
 class JobStartedData(BaseModel):
-    job_id: str
+    job_id: str = ""
     workspace_path: str
     evo_sha: str = ""
     base_sha: str = ""
 
 
 class JobCompletedData(BaseModel):
-    job_id: str
+    job_id: str = ""
     status: str
     git_ref: str | None = None
     summary: str
 
 
 class JobFailedData(BaseModel):
-    job_id: str
+    job_id: str = ""
     error: str
     traceback: str | None = None
     code: str = ""
 
 
 class RuntimeIssueData(BaseModel):
-    job_id: str
+    job_id: str = ""
     stage: str
-    message: str
     fatal: bool = False
     code: str = ""  # machine-readable issue code (e.g. "duplicate_tool_name")
+    details: dict = {}  # structured context (e.g. {"names": [...], "violations": [...]})
 
 
 class StageTransitionData(BaseModel):
-    job_id: str
+    job_id: str = ""
     from_stage: str
     to_stage: str
 
@@ -78,7 +78,7 @@ class SpawnRequestData(BaseModel):
     so that the external Supervisor can pick it up and handle fork-join.
     """
 
-    job_id: str
+    job_id: str = ""
     tasks: list[dict]
     wait_for: str = "all_complete"
 

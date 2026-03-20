@@ -1,5 +1,5 @@
 from pathlib import Path
-from palimpsest.gateway.tool_loader import resolve_tool_providers
+from palimpsest.runtime.tool_loader import resolve_tool_providers
 
 EVO_ROOT = Path(__file__).parent.parent / "evo"
 

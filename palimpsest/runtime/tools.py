@@ -1,12 +1,11 @@
-"""Built-in tool gateway — runtime-embedded tools.
+"""Tool gateway — unified tool execution with transparent event capture.
 
-Part of the Runtime (skeleton).  Tool execution events are captured
-transparently through the EventGateway.
+Part of the Runtime (skeleton).  All tools (builtin and evo) flow through
+the same ``UnifiedToolGateway`` which wraps ``ToolProvider`` instances
+with transparent event emission.
 
-``bash`` is embedded in the runtime.  ``spawn`` emits a spawn-request
-event for the external Supervisor — the runtime does NOT execute child
-tasks itself.  All other tools are defined in the evolvable repository
-and loaded by the tool resolver.
+``bash`` and ``spawn`` are runtime-embedded builtin tools implemented as
+a ``ToolProvider``.  They are added by default unless explicitly disabled.
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ from loguru import logger
 from palimpsest.config import ToolsConfig
 from palimpsest.events import SpawnRequestData, ToolExecData, ToolResultData
 from palimpsest.runtime.event_gateway import EventGateway
+from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
 
 
 @dataclass
@@ -42,43 +42,9 @@ class ToolGateway(ABC):
         pass
 
 
-class CompositeToolGateway(ToolGateway):
-    """Composes multiple tool gateways into a single interface."""
-
-    def __init__(self, gateways: list[ToolGateway]):
-        self._gateways = gateways
-        self._dispatch: dict[str, ToolGateway] = {}
-        for gw in gateways:
-            for s in gw.schema():
-                name = s["function"]["name"]
-                self._dispatch.setdefault(name, gw)
-
-    def schema(self) -> list[dict]:
-        schemas = []
-        for gw in self._gateways:
-            schemas.extend(gw.schema())
-        return schemas
-
-    def execute(self, name: str, call_id: str, args: dict, workspace: str) -> ToolResult:
-        gw = self._dispatch.get(name)
-        if gw:
-            return gw.execute(name, call_id, args, workspace)
-        return ToolResult(success=False, output=f"Unknown tool: {name}")
-
-
-def find_duplicate_tool_names(gateways: list[ToolGateway]) -> list[str]:
-    """Return duplicate tool names across gateways."""
-    seen: set[str] = set()
-    duplicates: set[str] = set()
-    for gw in gateways:
-        for schema in gw.schema():
-            name = schema["function"]["name"]
-            if name in seen:
-                duplicates.add(name)
-            else:
-                seen.add(name)
-    return sorted(duplicates)
-
+# ---------------------------------------------------------------------------
+# Builtin tool schemas (used by BuiltinToolProvider)
+# ---------------------------------------------------------------------------
 
 BUILTIN_TOOL_SCHEMAS = {
     "bash": {
@@ -142,61 +108,37 @@ BUILTIN_TOOL_SCHEMAS = {
 }
 
 
-class BuiltinToolGateway(ToolGateway):
-    """Runtime-embedded tools with transparent event capture.
+class BuiltinToolProvider(ToolProvider):
+    """Runtime-embedded tools (bash, spawn) implemented as a ToolProvider.
 
     ``bash`` executes commands locally.  ``spawn`` emits a spawn-request
     event — it does NOT run child tasks.
     """
 
-    def __init__(
-        self,
-        config: ToolsConfig,
-        gateway: EventGateway,
-        job_id: str,
-    ):
+    def __init__(self, config: ToolsConfig, gateway: EventGateway):
         self._config = config
         self._gateway = gateway
-        self._job_id = job_id
         self._disabled = set(config.disabled_builtins)
 
-    def schema(self) -> list[dict]:
-        return [
-            s for name, s in BUILTIN_TOOL_SCHEMAS.items()
-            if name not in self._disabled
-        ]
+    def tools(self) -> list[ToolSpec]:
+        specs = []
+        for name, schema in BUILTIN_TOOL_SCHEMAS.items():
+            if name not in self._disabled:
+                fn = schema["function"]
+                specs.append(ToolSpec(
+                    name=fn["name"],
+                    description=fn["description"],
+                    parameters=fn["parameters"],
+                ))
+        return specs
 
-    def execute(self, name: str, call_id: str, args: dict, workspace: str) -> ToolResult:
+    def as_provider_dict(self) -> dict[str, "BuiltinToolProvider"]:
+        """Return a dict mapping each tool name to this provider (for merging)."""
+        return {spec.name: self for spec in self.tools()}
+
+    def execute(self, name: str, args: dict, workspace: str) -> ToolResult:
         if name in self._disabled:
             return ToolResult(success=False, output=f"Tool '{name}' is disabled")
-
-        self._gateway.emit_tool_exec(
-            ToolExecData(
-                job_id=self._job_id,
-                tool_name=name,
-                tool_call_id=call_id,
-                arguments_preview=str(args)[:256],
-            )
-        )
-
-        start = time.monotonic_ns()
-        result = self._dispatch(name, args, workspace)
-        duration_ms = (time.monotonic_ns() - start) // 1_000_000
-
-        self._gateway.emit_tool_result(
-            ToolResultData(
-                job_id=self._job_id,
-                tool_name=name,
-                tool_call_id=call_id,
-                success=result.success,
-                duration_ms=duration_ms,
-                output_preview=result.output[:256],
-            )
-        )
-
-        return result
-
-    def _dispatch(self, name: str, args: dict, workspace: str) -> ToolResult:
         try:
             if name == "bash":
                 return self._bash(args, workspace)
@@ -238,7 +180,6 @@ class BuiltinToolGateway(ToolGateway):
 
         self._gateway.emit_spawn_request(
             SpawnRequestData(
-                job_id=self._job_id,
                 tasks=tasks,
                 wait_for=wait_for,
             )
@@ -251,3 +192,91 @@ class BuiltinToolGateway(ToolGateway):
                 f"(wait_for={wait_for}). The Supervisor will handle orchestration."
             ),
         )
+
+
+# ---------------------------------------------------------------------------
+# Unified tool gateway — single execution path for all tools
+# ---------------------------------------------------------------------------
+
+class UnifiedToolGateway(ToolGateway):
+    """Wraps ToolProvider instances into a single gateway with event capture.
+
+    All tools (builtin and evo) flow through this gateway. Event wrapping
+    (ToolExecData/ToolResultData) is handled once, here.
+    """
+
+    def __init__(
+        self,
+        providers: dict[str, ToolProvider],
+        gateway: EventGateway,
+    ):
+        self._providers = providers
+        self._gateway = gateway
+        # Pre-build schema list
+        self._schemas: list[dict] = []
+        seen: set[str] = set()
+        for name, provider in providers.items():
+            if name in seen:
+                continue
+            for spec in provider.tools():
+                if spec.name == name:
+                    self._schemas.append({
+                        "type": "function",
+                        "function": {
+                            "name": spec.name,
+                            "description": spec.description,
+                            "parameters": spec.parameters,
+                        },
+                    })
+                    seen.add(name)
+
+    def schema(self) -> list[dict]:
+        return self._schemas
+
+    def execute(self, name: str, call_id: str, args: dict, workspace: str) -> ToolResult:
+        provider = self._providers.get(name)
+        if not provider:
+            return ToolResult(success=False, output=f"Unknown tool: {name}")
+
+        self._gateway.emit_tool_exec(
+            ToolExecData(
+                tool_name=name,
+                tool_call_id=call_id,
+                arguments_preview=str(args)[:256],
+            )
+        )
+
+        start = time.monotonic_ns()
+        try:
+            result = provider.execute(name, args, workspace)
+        except Exception as exc:
+            logger.error(f"Tool {name} raised: {exc}")
+            result = ToolResult(success=False, output=f"Tool error: {exc}")
+
+        duration_ms = (time.monotonic_ns() - start) // 1_000_000
+
+        self._gateway.emit_tool_result(
+            ToolResultData(
+                tool_name=name,
+                tool_call_id=call_id,
+                success=result.success,
+                duration_ms=duration_ms,
+                output_preview=result.output[:256],
+            )
+        )
+
+        return result
+
+
+def find_duplicate_tool_names(providers: dict[str, ToolProvider], *more: dict[str, ToolProvider]) -> list[str]:
+    """Return duplicate tool names across provider dicts."""
+    all_dicts = [providers] + list(more)
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for d in all_dicts:
+        for name in d:
+            if name in seen:
+                duplicates.add(name)
+            else:
+                seen.add(name)
+    return sorted(duplicates)

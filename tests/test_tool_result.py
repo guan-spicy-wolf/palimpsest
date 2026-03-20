@@ -1,4 +1,4 @@
-from palimpsest.gateway.tools import ToolResult
+from palimpsest.runtime.tools import ToolResult
 
 def test_tool_result_has_terminal_field():
     r = ToolResult(success=True, output="done", terminal=True)
