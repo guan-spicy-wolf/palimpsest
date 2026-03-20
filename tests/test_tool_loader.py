@@ -2,42 +2,46 @@ import textwrap
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from palimpsest.runtime.tool_loader import resolve_tool_providers
-from palimpsest.runtime.tools import UnifiedToolGateway, ToolResult
+from palimpsest.runtime.tools import (
+    UnifiedToolGateway,
+    ToolResult,
+    resolve_tool_functions,
+)
+from palimpsest.config import ToolsConfig
 
 
-def test_resolve_tool_providers(tmp_path):
+def test_resolve_tool_functions_discovers_decorated(tmp_path):
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir()
-    (tools_dir / "__init__.py").write_text("")
     (tools_dir / "echo.py").write_text(textwrap.dedent("""\
-        from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
-        from palimpsest.runtime.tools import ToolResult
-        class EchoProvider(ToolProvider):
-            def tools(self):
-                return [ToolSpec(name="echo", description="Echo back", parameters={"type": "object", "properties": {"msg": {"type": "string"}}, "required": ["msg"]})]
-            def execute(self, name, args, workspace):
-                return ToolResult(success=True, output=args.get("msg", ""))
+        from palimpsest.runtime.tools import tool, ToolResult
+
+        @tool
+        def echo(msg: str) -> ToolResult:
+            \"\"\"Echo back the message.\"\"\"
+            return ToolResult(success=True, output=msg)
     """))
-    providers = resolve_tool_providers(tmp_path, ["echo"])
-    assert "echo" in providers
+    funcs = resolve_tool_functions(tmp_path, ["echo"])
+    assert "echo" in funcs
+    result = funcs["echo"](msg="hello")
+    assert result.output == "hello"
 
 
-def test_unified_gateway_with_resolved_providers(tmp_path):
+def test_unified_gateway_with_evo_tools(tmp_path):
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir()
-    (tools_dir / "__init__.py").write_text("")
     (tools_dir / "echo.py").write_text(textwrap.dedent("""\
-        from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
-        from palimpsest.runtime.tools import ToolResult
-        class EchoProvider(ToolProvider):
-            def tools(self):
-                return [ToolSpec(name="echo", description="Echo", parameters={"type": "object", "properties": {}})]
-            def execute(self, name, args, workspace):
-                return ToolResult(success=True, output="ok")
+        from palimpsest.runtime.tools import tool, ToolResult
+
+        @tool
+        def echo(msg: str) -> ToolResult:
+            \"\"\"Echo back.\"\"\"
+            return ToolResult(success=True, output="ok")
     """))
-    providers = resolve_tool_providers(tmp_path, ["echo"])
-    gw = UnifiedToolGateway(providers, MagicMock())
+
+    config = ToolsConfig(disabled_builtins=["bash", "spawn"])
+    gateway = MagicMock()
+    gw = UnifiedToolGateway(config, tmp_path, ["echo"], gateway)
     schemas = gw.schema()
     assert len(schemas) == 1
     assert schemas[0]["function"]["name"] == "echo"

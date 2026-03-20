@@ -1,83 +1,61 @@
 import sys
 import textwrap
 from pathlib import Path
-from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
-from palimpsest.runtime.tools import ToolResult
+
+from palimpsest.runtime.tools import ToolResult, resolve_tool_functions
 
 
-def test_resolve_discovers_subclasses(tmp_path):
-    from palimpsest.runtime.resolver import resolve_providers
+def test_resolve_discovers_decorated_tools(tmp_path):
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir()
-    (tools_dir / "__init__.py").write_text("")
     (tools_dir / "greet.py").write_text(textwrap.dedent("""\
-        from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
-        from palimpsest.runtime.tools import ToolResult
-        class GreetProvider(ToolProvider):
-            def tools(self):
-                return [ToolSpec(name="greet", description="Say hi", parameters={})]
-            def execute(self, name, args, workspace):
-                return ToolResult(success=True, output="hello")
+        from palimpsest.runtime.tools import tool, ToolResult
+
+        @tool
+        def greet() -> ToolResult:
+            \"\"\"Say hi.\"\"\"
+            return ToolResult(success=True, output="hello")
     """))
-    result = resolve_providers(
-        scan_dir=tools_dir,
-        base_class=ToolProvider,
-        key_fn=lambda inst: [s.name for s in inst.tools()],
-        requested=["greet"],
-    )
+    result = resolve_tool_functions(tmp_path, ["greet"])
     assert "greet" in result
-    assert result["greet"].execute("greet", {}, "/tmp").output == "hello"
+    assert result["greet"]().output == "hello"
 
 
 def test_resolve_no_sys_modules_leak(tmp_path):
-    from palimpsest.runtime.resolver import resolve_providers
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir()
-    (tools_dir / "__init__.py").write_text("")
     (tools_dir / "leak_check.py").write_text(textwrap.dedent("""\
-        from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
-        from palimpsest.runtime.tools import ToolResult
-        class LeakProvider(ToolProvider):
-            def tools(self):
-                return [ToolSpec(name="leak", description="x", parameters={})]
-            def execute(self, name, args, workspace):
-                return ToolResult(success=True, output="ok")
+        from palimpsest.runtime.tools import tool, ToolResult
+
+        @tool
+        def leak() -> ToolResult:
+            \"\"\"Test leak.\"\"\"
+            return ToolResult(success=True, output="ok")
     """))
     before = set(sys.modules.keys())
-    resolve_providers(
-        scan_dir=tools_dir,
-        base_class=ToolProvider,
-        key_fn=lambda inst: [s.name for s in inst.tools()],
-        requested=["leak"],
-    )
+    resolve_tool_functions(tmp_path, ["leak"])
     after = set(sys.modules.keys())
     new_modules = after - before
     assert not any("leak_check" in m for m in new_modules)
 
 
 def test_resolve_filters_to_requested_only(tmp_path):
-    from palimpsest.runtime.resolver import resolve_providers
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir()
-    (tools_dir / "__init__.py").write_text("")
     (tools_dir / "multi.py").write_text(textwrap.dedent("""\
-        from palimpsest.runtime.interfaces import ToolProvider, ToolSpec
-        from palimpsest.runtime.tools import ToolResult
-        class MultiProvider(ToolProvider):
-            def tools(self):
-                return [
-                    ToolSpec(name="a", description="a", parameters={}),
-                    ToolSpec(name="b", description="b", parameters={}),
-                ]
-            def execute(self, name, args, workspace):
-                return ToolResult(success=True, output=name)
+        from palimpsest.runtime.tools import tool, ToolResult
+
+        @tool
+        def a() -> ToolResult:
+            \"\"\"Tool a.\"\"\"
+            return ToolResult(success=True, output="a")
+
+        @tool
+        def b() -> ToolResult:
+            \"\"\"Tool b.\"\"\"
+            return ToolResult(success=True, output="b")
     """))
-    result = resolve_providers(
-        scan_dir=tools_dir,
-        base_class=ToolProvider,
-        key_fn=lambda inst: [s.name for s in inst.tools()],
-        requested=["a"],
-    )
+    result = resolve_tool_functions(tmp_path, ["a"])
     assert "a" in result
     assert "b" not in result
 
@@ -85,21 +63,14 @@ def test_resolve_filters_to_requested_only(tmp_path):
 def test_resolve_warns_missing(tmp_path):
     import io
     from loguru import logger
-    from palimpsest.runtime.resolver import resolve_providers
 
     tools_dir = tmp_path / "tools"
     tools_dir.mkdir()
-    (tools_dir / "__init__.py").write_text("")
 
     log_sink = io.StringIO()
     sink_id = logger.add(log_sink, format="{message}", level="WARNING")
     try:
-        resolve_providers(
-            scan_dir=tools_dir,
-            base_class=ToolProvider,
-            key_fn=lambda inst: [s.name for s in inst.tools()],
-            requested=["nonexistent"],
-        )
+        resolve_tool_functions(tmp_path, ["nonexistent"])
         log_output = log_sink.getvalue()
         assert "nonexistent" in log_output
     finally:

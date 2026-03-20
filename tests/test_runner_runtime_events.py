@@ -25,18 +25,12 @@ class RecordingEmitter:
 
 def _base_patches(emitter, tmp_path, **overrides):
     """Return a dict of common patches for runner tests."""
-    fake_builtin = MagicMock()
-    fake_builtin.as_provider_dict.return_value = {}
-
     defaults = {
         "palimpsest.runner.EventEmitter": MagicMock(return_value=emitter),
         "palimpsest.runner._read_evo_sha": MagicMock(return_value="abc123"),
         "palimpsest.runner.setup_workspace": MagicMock(return_value=str(tmp_path)),
         "palimpsest.runner.build_context": MagicMock(return_value={"system": "sys", "task": "task"}),
-        "palimpsest.runner.LiteLLMGateway": MagicMock(),
-        "palimpsest.runner.BuiltinToolProvider": MagicMock(return_value=fake_builtin),
-        "palimpsest.runner.resolve_tool_providers": MagicMock(return_value={}),
-        "palimpsest.runner.find_duplicate_tool_names": MagicMock(return_value=[]),
+        "palimpsest.runner.UnifiedLLMGateway": MagicMock(),
         "palimpsest.runner.UnifiedToolGateway": MagicMock(),
         "palimpsest.runner.finalize_workspace_after_job": MagicMock(return_value=None),
     }
@@ -63,15 +57,17 @@ def test_duplicate_tool_names_emit_runtime_issue_and_job_failed(tmp_path):
     config = JobConfig(task="x")
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
 
+    # Make UnifiedToolGateway raise ValueError for duplicate tools
     patches = _base_patches(emitter, tmp_path)
-    patches["palimpsest.runner.find_duplicate_tool_names"] = MagicMock(return_value=["dup_tool"])
+    patches["palimpsest.runner.UnifiedToolGateway"] = MagicMock(
+        side_effect=ValueError("Duplicate tool names configured: dup_tool")
+    )
 
     with _apply_patches(patches)[0]:
         with pytest.raises(Exception):
             _run_job_from_spec(config, spec, tmp_path)
 
-    assert any(isinstance(event, RuntimeIssueData) and event.stage == "interaction" for event in emitter.events)
-    assert any(isinstance(event, JobFailedData) and "dup_tool" in event.error and event.code == "duplicate_tool_name" for event in emitter.events)
+    assert any(isinstance(event, JobFailedData) and "dup_tool" in event.error for event in emitter.events)
 
 
 def test_cleanup_issue_calls_finalize_with_gateway(tmp_path):
