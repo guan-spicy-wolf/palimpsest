@@ -126,7 +126,7 @@ def bash(command: str, workspace: str, config: ToolsConfig | None = None) -> Too
 
 
 @tool
-def spawn(tasks: list, gateway: EventGateway, wait_for: str = "all_complete") -> ToolResult:
+def spawn(tasks: list, gateway: EventGateway, evo_root: str, wait_for: str = "all_complete") -> ToolResult:
     """Request the Supervisor to spawn child tasks.
     
     tasks: List of child tasks to spawn.
@@ -134,6 +134,20 @@ def spawn(tasks: list, gateway: EventGateway, wait_for: str = "all_complete") ->
     """
     if not tasks:
         return ToolResult(success=False, output="No tasks provided to spawn")
+
+    import git
+    from pathlib import Path
+    try:
+        evo_sha = git.Repo(Path(evo_root)).head.commit.hexsha
+    except Exception:
+        evo_sha = ""
+
+    # Translate role into specific file and sha
+    for task in tasks:
+        if "role" in task:
+            role_name = task.pop("role")
+            task["role_file"] = f"roles/{role_name}.py"
+            task["role_sha"] = evo_sha
 
     gateway.emit(
         SpawnRequestData(
@@ -235,6 +249,7 @@ class UnifiedToolGateway:
     ):
         self._gateway = gateway
         self._config = config
+        self._evo_root = evo_root
         
         # Load builtins
         disabled = set(config.disabled_builtins)
@@ -285,6 +300,8 @@ class UnifiedToolGateway:
                 kwargs["workspace"] = workspace
             if "gateway" in sig.parameters and getattr(func, "__module__", "").startswith("palimpsest.runtime"):
                 kwargs["gateway"] = self._gateway
+            if "evo_root" in sig.parameters:
+                kwargs["evo_root"] = str(self._evo_root)
 
             result = func(**kwargs)
             

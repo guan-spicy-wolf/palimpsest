@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import signal
 import traceback
-import uuid
 from pathlib import Path
 
 import git
@@ -81,8 +80,9 @@ def run_job(config: JobConfig) -> None:
 def _run_job_from_spec(
     config: JobConfig, spec: JobSpec, evo_path: Path
 ) -> None:
-    """Execute the four-stage pipeline from a resolved JobSpec."""
-    job_id = uuid.uuid4().hex[:12]
+    job_id = config.job_id
+    if not job_id:
+        raise ValueError("Job ID must be specified in the configuration.")
 
     emitter = EventEmitter(config.eventstore)
     gateway = EventGateway(emitter, job_id)

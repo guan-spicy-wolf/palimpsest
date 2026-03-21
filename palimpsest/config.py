@@ -58,6 +58,7 @@ class EventStoreConfig:
 
 @dataclass
 class JobConfig:
+    job_id: str = ""
     task: str = ""
     role: str = "default"
     timeout: int = 0  # job wall-clock timeout in seconds; 0 = no limit
@@ -73,6 +74,7 @@ class JobConfig:
             data = yaml.safe_load(f) or {}
 
         return cls(
+            job_id=data.get("job_id", ""),
             task=data.get("task", ""),
             role=data.get("role", "default"),
             timeout=data.get("timeout", 0),
