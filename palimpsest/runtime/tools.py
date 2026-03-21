@@ -259,6 +259,8 @@ class UnifiedToolGateway:
             # Wrap bash with config injection
             def bash_with_config(command: str, workspace: str) -> ToolResult:
                 return bash(command, workspace, config=self._config)
+            bash_with_config.__tool_schema__ = bash.__tool_schema__
+            bash_with_config.__is_tool__ = True
             self._functions["bash"] = bash_with_config
         if "spawn" not in disabled:
             self._functions["spawn"] = spawn
