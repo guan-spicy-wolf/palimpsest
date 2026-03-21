@@ -49,15 +49,42 @@ class LLMGateway(ABC):
 
 
 class UnifiedLLMGateway(LLMGateway):
-    """Unified Native LLM Gateway routing between OpenAI and Anthropic SDKs."""
+    """Unified Native LLM Gateway routing between OpenAI and Anthropic SDKs.
+    
+    Falls back to MockLLMGateway if no API key is available.
+    """
 
     def __init__(self, config: LLMConfig, gateway: EventGateway):
         self._config = config
         self._gateway = gateway
         self._iteration = 0
         self._api_key = os.environ.get(config.api_key_env, "")
+        
+        # Check if we should use mock mode
+        if not self._api_key and not os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
+            logger.warning("No API key found, falling back to MockLLMGateway")
+            self._mock_gateway = self._create_mock_gateway()
+        else:
+            self._mock_gateway = None
+
+    def _create_mock_gateway(self):
+        """Create a mock LLM gateway for testing."""
+        from palimpsest.runtime.mock_llm import MockLLMGateway
+        return MockLLMGateway(self._config, self._gateway)
 
     def call(self, messages: list[dict], tools_schema: list[dict]) -> LLMResponse:
+        # Use mock if no API key available
+        if self._mock_gateway:
+            mock_response = self._mock_gateway.call(messages, tools_schema)
+            # Convert mock response to standard LLMResponse
+            return LLMResponse(
+                text=mock_response.text,
+                tool_calls=[ToolCall(id=tc.id, name=tc.name, arguments=tc.arguments) for tc in mock_response.tool_calls],
+                finish_reason=mock_response.finish_reason,
+                input_tokens=mock_response.input_tokens,
+                output_tokens=mock_response.output_tokens,
+                raw_message=mock_response.raw_message,
+            )
         self._iteration += 1
 
         self._gateway.emit(

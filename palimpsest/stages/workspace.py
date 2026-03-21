@@ -50,6 +50,7 @@ def setup_workspace(
         repo = git.Repo.clone_from(
             config.repo,
             workspace_path,
+            allow_unsafe_options=True,
             **clone_kwargs,
         )
     else:
