@@ -103,6 +103,9 @@ def _run_job_from_spec(
             evo_sha=evo_sha,
         )
 
+        # Capture base SHA before any agent modifications (used by guardrails).
+        base_sha = git.Repo(workspace).head.commit.hexsha
+
         # Stage 2: Context (emits stage-transition internally)
         context = build_context(
             job_id, workspace, config.task, spec, gateway, evo_root=evo_path,
@@ -113,6 +116,7 @@ def _run_job_from_spec(
         llm = _setup_llm(config, gateway)
         result, git_ref = _stage_interaction_and_publication(
             job_id, context, workspace, config, spec, gateway, tools, llm,
+            base_sha=base_sha,
         )
 
         gateway.emit(
@@ -187,6 +191,8 @@ def _stage_interaction_and_publication(
     gateway: EventGateway,
     tools: UnifiedToolGateway,
     llm: UnifiedLLMGateway,
+    *,
+    base_sha: str = "",
 ) -> tuple[dict, str]:
     """Stage 3+4: interaction loop with publication recovery. Returns (result, git_ref)."""
     from palimpsest.events import StageTransitionData
@@ -213,7 +219,7 @@ def _stage_interaction_and_publication(
 
         # Publication guardrails
         gateway.emit(StageTransitionData(from_stage="interaction", to_stage="publication"))
-        issues = find_publication_issues(git.Repo(workspace))
+        issues = find_publication_issues(git.Repo(workspace), base_sha=base_sha)
         if issues:
             can_retry = publication_recovery_attempts < max_recovery_attempts
             gateway.emit(

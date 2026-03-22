@@ -48,9 +48,13 @@ def finalize_workspace_after_job(
 def find_publication_issues(
     repo: git.Repo,
     *,
+    base_sha: str = "",
     allow_sensitive_env: str = "PALIMPSEST_ALLOW_SENSITIVE",
 ) -> list[str]:
     """Return a list of publication issues (guardrails).
+
+    Only checks files introduced or modified by this job (diff against
+    *base_sha*). Falls back to all tracked files when *base_sha* is empty.
 
     Current policy is intentionally minimal: only flags common secret-like
     filenames and private key material. Set allow_sensitive_env=1 to bypass.
@@ -59,7 +63,14 @@ def find_publication_issues(
         return []
 
     root = Path(repo.working_tree_dir or ".")
-    tracked = repo.git.ls_files().splitlines()
+
+    if base_sha:
+        try:
+            candidates = repo.git.diff(base_sha, "HEAD", "--name-only").splitlines()
+        except Exception:
+            candidates = repo.git.ls_files().splitlines()
+    else:
+        candidates = repo.git.ls_files().splitlines()
 
     sensitive_suffixes = (".pem", ".key", ".p12", ".pfx")
     sensitive_basenames = {
@@ -70,12 +81,17 @@ def find_publication_issues(
         "id_ed25519",
         "credentials",
     }
+    # Template files are intentionally committed — they contain no real secrets.
+    env_template_suffixes = (".example", ".sample", ".template")
 
     issues: list[str] = []
-    for rel in tracked:
+    for rel in candidates:
         p = Path(rel)
         name = p.name
-        if name in sensitive_basenames or name.startswith(".env."):
+        if name in sensitive_basenames:
+            issues.append(f"Sensitive-looking file tracked: {rel}")
+            continue
+        if name.startswith(".env.") and not any(name.endswith(s) for s in env_template_suffixes):
             issues.append(f"Sensitive-looking file tracked: {rel}")
             continue
         if any(name.endswith(s) for s in sensitive_suffixes):
