@@ -9,7 +9,8 @@ import yaml
 @dataclass
 class WorkspaceConfig:
     repo: str = ""
-    branch: str = "main"
+    init_branch: str = "main"   # branch to clone from
+    new_branch: bool = True     # True = create new job branch; False = work on init_branch
     depth: int = 1
     git_token_env: str = ""
 
@@ -44,8 +45,10 @@ class ToolsConfig:
 
 @dataclass
 class PublicationConfig:
-    strategy: str = "branch"
     branch_prefix: str = "palimpsest/job"
+    result_branch: str = ""     # push target; empty = auto-generate {branch_prefix}/{job_id}
+    create_pr: bool = True      # create a PR after push
+    pr_base: str = "main"       # PR target base branch
     max_recovery_attempts: int = 1
 
 

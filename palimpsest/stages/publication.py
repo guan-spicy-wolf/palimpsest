@@ -24,9 +24,11 @@ def publish_results(
     repo = git.Repo(workspace_path)
     repo.git.add("-A")
 
+    status = result.get("status", "success")
     summary = result.get("summary", "")[:500]
+    commit_prefix = "wip" if status == "partial" else "feat"
     if repo.is_dirty(index=True) or repo.untracked_files:
-        commit = repo.index.commit(f"feat: palimpsest job {job_id}\n\n{summary}")
+        commit = repo.index.commit(f"{commit_prefix}: palimpsest job {job_id}\n\n{summary}")
         logger.info(f"Committed {commit.hexsha[:8]}")
     else:
         repo.git.commit("--allow-empty", "-m", f"chore: palimpsest job {job_id} (no changes)")

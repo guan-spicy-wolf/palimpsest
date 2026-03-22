@@ -33,9 +33,9 @@ def setup_workspace(
     logger.info(f"Created workspace: {workspace_path}")
 
     if config.repo:
-        logger.info(f"Cloning {config.repo} branch={config.branch}")
+        logger.info(f"Cloning {config.repo} branch={config.init_branch}")
         clone_kwargs = {
-            "branch": config.branch,
+            "branch": config.init_branch,
             "depth": config.depth,
         }
 
@@ -61,9 +61,12 @@ def setup_workspace(
         repo.index.add([".palimpsest"])
         repo.index.commit(f"init: workspace for job {job_id}")
 
-    job_branch = f"{branch_prefix}/{job_id}"
-    repo.git.checkout("-b", job_branch)
-    logger.info(f"Created branch: {job_branch}")
+    if config.new_branch:
+        job_branch = f"{branch_prefix}/{job_id}"
+        repo.git.checkout("-b", job_branch)
+        logger.info(f"Created branch: {job_branch}")
+    else:
+        logger.info(f"Working directly on branch: {config.init_branch}")
 
     if gateway:
         base_sha = _read_head_sha(workspace_path)
