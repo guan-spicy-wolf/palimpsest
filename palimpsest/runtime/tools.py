@@ -126,6 +126,17 @@ def bash(command: str, workspace: str, config: ToolsConfig | None = None) -> Too
 
 
 @tool
+def task_complete(summary: str, status: str = "success") -> ToolResult:
+    """Signal that the task is complete. Always call this when done.
+
+    Args:
+        summary: Brief summary of what was accomplished.
+        status: 'success' if fully complete, 'partial' if only partially done.
+    """
+    return ToolResult(success=True, output=f"[{status}] {summary}", terminal=True)
+
+
+@tool
 def spawn(tasks: list, gateway: EventGateway, evo_root: str, wait_for: str = "all_complete") -> ToolResult:
     """Request the Supervisor to spawn child tasks.
     
@@ -264,7 +275,9 @@ class UnifiedToolGateway:
             self._functions["bash"] = bash_with_config
         if "spawn" not in disabled:
             self._functions["spawn"] = spawn
-            
+        # task_complete is always available — it's a runtime control signal
+        self._functions["task_complete"] = task_complete
+
         # Load evo tools
         evo_funcs = resolve_tool_functions(evo_root, requested_evo_tools)
         
