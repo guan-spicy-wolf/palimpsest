@@ -245,7 +245,13 @@ def _stage_interaction_and_publication(
             )
             continue
 
-        git_ref = publish_results(job_id, result, workspace, config.publication)
+        git_ref = publish_results(
+            job_id,
+            result,
+            workspace,
+            config.publication,
+            git_token_env=config.workspace.git_token_env,
+        )
         return result, git_ref
 
 

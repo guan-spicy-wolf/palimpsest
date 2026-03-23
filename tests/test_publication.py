@@ -1,4 +1,5 @@
 import pytest
+from contextlib import nullcontext
 from unittest.mock import patch, MagicMock
 
 import git
@@ -49,3 +50,36 @@ def test_publication_push_failure_propagates(tmp_path):
         repo.create_remote("origin", "https://example.com/repo.git")
         with pytest.raises(git.GitCommandError):
             publish_results("test-3", result, str(tmp_path), config)
+
+
+def test_publication_push_uses_git_token_env_for_authenticated_https(monkeypatch, tmp_path):
+    repo = git.Repo.init(tmp_path)
+    (tmp_path / "init.txt").write_text("init")
+    repo.index.add(["init.txt"])
+    repo.index.commit("init")
+    repo.git.checkout("-b", "palimpsest/job/test-4")
+    repo.create_remote("origin", "https://example.com/repo.git")
+
+    (tmp_path / "new.txt").write_text("content")
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    config = PublicationConfig()
+    result = {"status": "success", "summary": "test"}
+
+    with (
+        patch("git.cmd.Git.custom_environment", return_value=nullcontext()) as custom_env,
+        patch.object(git.Remote, "push", return_value=[]),
+    ):
+        publish_results(
+            "test-4",
+            result,
+            str(tmp_path),
+            config,
+            git_token_env="GITHUB_TOKEN",
+        )
+
+    custom_env.assert_called_once()
+    env_kwargs = custom_env.call_args.kwargs
+    assert env_kwargs["GIT_CONFIG_COUNT"] == "1"
+    assert env_kwargs["GIT_CONFIG_KEY_0"] == "http.extraHeader"
+    assert env_kwargs["GIT_CONFIG_VALUE_0"].startswith("AUTHORIZATION: basic ")

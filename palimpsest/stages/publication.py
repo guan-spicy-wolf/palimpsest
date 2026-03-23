@@ -1,9 +1,28 @@
 from __future__ import annotations
 
+import base64
+import os
+from contextlib import nullcontext
+
 import git
 from loguru import logger
 
 from palimpsest.config import PublicationConfig
+
+
+def _push_auth_environment(git_token_env: str) -> dict[str, str]:
+    """Build transient git config env for authenticated HTTPS pushes."""
+    token = os.environ.get(git_token_env, "") if git_token_env else ""
+    if not token:
+        return {}
+
+    auth_str = f"x-access-token:{token}"
+    b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
+    return {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraHeader",
+        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {b64_auth}",
+    }
 
 
 def publish_results(
@@ -11,6 +30,8 @@ def publish_results(
     result: dict,
     workspace_path: str,
     config: PublicationConfig,
+    *,
+    git_token_env: str = "",
 ) -> str | None:
     """Git commit and push. Returns git_ref 'branch:sha' or None.
 
@@ -40,7 +61,10 @@ def publish_results(
 
     if repo.remotes:
         logger.info(f"Pushing {branch_name}")
-        repo.remotes[0].push(branch_name)
+        auth_env = _push_auth_environment(git_token_env)
+        auth_ctx = repo.git.custom_environment(**auth_env) if auth_env else nullcontext()
+        with auth_ctx:
+            repo.remotes[0].push(branch_name)
     else:
         logger.warning("No remote configured, skipping push")
 

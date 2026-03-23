@@ -45,6 +45,7 @@ class ToolsConfig:
 
 @dataclass
 class PublicationConfig:
+    strategy: str = "branch"
     branch_prefix: str = "palimpsest/job"
     result_branch: str = ""     # push target; empty = auto-generate {branch_prefix}/{job_id}
     create_pr: bool = True      # create a PR after push

@@ -12,3 +12,6 @@ wheels/
 
 # claude
 .claude/
+
+# Local runtime/config
+config.local.yaml

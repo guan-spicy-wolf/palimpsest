@@ -3,7 +3,7 @@ role: "default"
 
 workspace:
   repo: "https://github.com/morrejssc-hub/palimpsest-test.git"
-  branch: "main"
+  init_branch: "main"
   depth: 1
   git_token_env: "GITHUB_TOKEN"
 
