@@ -39,13 +39,16 @@ def setup_workspace(
             "depth": config.depth,
         }
 
-        token_env = getattr(config, "git_token_env", "")
-        token = os.environ.get(token_env, "") if token_env else ""
-        if token:
-            # Injecting token as HTTP basic auth extra header avoids logging and URL leaks
-            auth_str = f"x-access-token:{token}"
-            b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
-            clone_kwargs["c"] = f"http.extraHeader=AUTHORIZATION: basic {b64_auth}"
+        # Environment-first: if GIT_CONFIG_COUNT is set, the runtime environment
+        # (e.g. Trenni isolation layer) has already configured git credentials.
+        # Fallback: use git_token_env for standalone/development usage.
+        if not os.environ.get("GIT_CONFIG_COUNT"):
+            token_env = getattr(config, "git_token_env", "")
+            token = os.environ.get(token_env, "") if token_env else ""
+            if token:
+                auth_str = f"x-access-token:{token}"
+                b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
+                clone_kwargs["c"] = f"http.extraHeader=AUTHORIZATION: basic {b64_auth}"
 
         repo = git.Repo.clone_from(
             config.repo,

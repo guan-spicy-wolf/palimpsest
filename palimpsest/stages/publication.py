@@ -12,9 +12,19 @@ from palimpsest.config import PublicationConfig
 def _push_auth_environment(git_token_env: str) -> dict[str, str]:
     """Build transient git config env for authenticated HTTPS pushes.
 
-    The empty first value clears any inherited `http.extraHeader` entries so the
-    final request contains only one Authorization header.
+    Returns a dict to be merged with os.environ. The empty first value clears
+    any inherited ``http.extraHeader`` entries so the final request contains
+    only one Authorization header.
+
+    Returns an empty dict when:
+    - GIT_CONFIG_COUNT is already set (runtime environment handles auth), or
+    - no token is available.
     """
+    # Environment-first: if the runtime environment already configured
+    # git credentials via GIT_CONFIG_*, skip the fallback.
+    if os.environ.get("GIT_CONFIG_COUNT"):
+        return {}
+
     token = os.environ.get(git_token_env, "") if git_token_env else ""
     if not token:
         return {}
@@ -68,9 +78,11 @@ def publish_results(
         logger.info(f"Pushing {branch_name}")
         auth_env = _push_auth_environment(git_token_env)
         if auth_env:
+            # Merge with os.environ so git still has PATH, HOME, etc.
+            merged_env = {**os.environ, **auth_env}
             repo.git.execute(
                 ["git", "push", "--porcelain", "--", repo.remotes[0].name, branch_name],
-                env=auth_env,
+                env=merged_env,
             )
         else:
             repo.git.push("--porcelain", "--", repo.remotes[0].name, branch_name)
