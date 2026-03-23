@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import os
-from contextlib import nullcontext
 
 import git
 from loguru import logger
@@ -11,7 +10,11 @@ from palimpsest.config import PublicationConfig
 
 
 def _push_auth_environment(git_token_env: str) -> dict[str, str]:
-    """Build transient git config env for authenticated HTTPS pushes."""
+    """Build transient git config env for authenticated HTTPS pushes.
+
+    The empty first value clears any inherited `http.extraHeader` entries so the
+    final request contains only one Authorization header.
+    """
     token = os.environ.get(git_token_env, "") if git_token_env else ""
     if not token:
         return {}
@@ -19,32 +22,12 @@ def _push_auth_environment(git_token_env: str) -> dict[str, str]:
     auth_str = f"x-access-token:{token}"
     b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
     return {
-        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_COUNT": "2",
         "GIT_CONFIG_KEY_0": "http.extraHeader",
-        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {b64_auth}",
+        "GIT_CONFIG_VALUE_0": "",
+        "GIT_CONFIG_KEY_1": "http.extraHeader",
+        "GIT_CONFIG_VALUE_1": f"AUTHORIZATION: basic {b64_auth}",
     }
-
-
-def _repo_has_auth_header(repo: git.Repo) -> bool:
-    """Return True when the repo already has an http.extraHeader configured."""
-    try:
-        with repo.config_reader() as cfg:
-            for section in cfg.sections():
-                if section == "http":
-                    try:
-                        if cfg.get_value(section, "extraHeader"):
-                            return True
-                    except Exception:
-                        pass
-                if section.startswith('http "') and section.endswith('"'):
-                    try:
-                        if cfg.get_value(section, "extraHeader"):
-                            return True
-                    except Exception:
-                        pass
-    except Exception:
-        return False
-    return False
 
 
 def publish_results(
@@ -83,11 +66,13 @@ def publish_results(
 
     if repo.remotes:
         logger.info(f"Pushing {branch_name}")
-        auth_env = {}
-        if not _repo_has_auth_header(repo):
-            auth_env = _push_auth_environment(git_token_env)
-        auth_ctx = repo.git.custom_environment(**auth_env) if auth_env else nullcontext()
-        with auth_ctx:
+        auth_env = _push_auth_environment(git_token_env)
+        if auth_env:
+            repo.git.execute(
+                ["git", "push", "--porcelain", "--", repo.remotes[0].name, branch_name],
+                env=auth_env,
+            )
+        else:
             repo.git.push("--porcelain", "--", repo.remotes[0].name, branch_name)
     else:
         logger.warning("No remote configured, skipping push")

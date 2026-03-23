@@ -1,5 +1,4 @@
 import pytest
-from contextlib import nullcontext
 from unittest.mock import patch, MagicMock
 
 import git
@@ -65,18 +64,16 @@ def test_publication_push_uses_git_token_env_for_authenticated_https(monkeypatch
 
     config = PublicationConfig()
     result = {"status": "success", "summary": "test"}
+    orig_execute = git.cmd.Git.execute
 
-    orig_call_process = git.cmd.Git._call_process
-
-    def call_process_side_effect(self, method, *args, **kwargs):
-        if method == "push":
+    def execute_side_effect(self, command, *args, **kwargs):
+        if command[:2] == ["git", "push"]:
             return ""
-        return orig_call_process(self, method, *args, **kwargs)
+        return orig_execute(self, command, *args, **kwargs)
 
     with (
         patch("palimpsest.stages.publication.git.Repo", return_value=repo),
-        patch("git.cmd.Git.custom_environment", return_value=nullcontext()) as custom_env,
-        patch.object(git.cmd.Git, "_call_process", autospec=True, side_effect=call_process_side_effect) as call_process,
+        patch.object(git.cmd.Git, "execute", autospec=True, side_effect=execute_side_effect) as execute_mock,
     ):
         publish_results(
             "test-4",
@@ -86,46 +83,11 @@ def test_publication_push_uses_git_token_env_for_authenticated_https(monkeypatch
             git_token_env="GITHUB_TOKEN",
         )
 
-    custom_env.assert_called_once()
-    assert call_process.call_args.args[1] == "push"
-    env_kwargs = custom_env.call_args.kwargs
-    assert env_kwargs["GIT_CONFIG_COUNT"] == "1"
-    assert env_kwargs["GIT_CONFIG_KEY_0"] == "http.extraHeader"
-    assert env_kwargs["GIT_CONFIG_VALUE_0"].startswith("AUTHORIZATION: basic ")
-
-
-def test_publication_push_skips_env_auth_when_repo_already_has_extra_header(monkeypatch, tmp_path):
-    repo = git.Repo.init(tmp_path)
-    (tmp_path / "init.txt").write_text("init")
-    repo.index.add(["init.txt"])
-    repo.index.commit("init")
-    repo.git.checkout("-b", "palimpsest/job/test-5")
-    repo.create_remote("origin", "https://example.com/repo.git")
-    repo.git.config("http.extraHeader", "AUTHORIZATION: basic existing")
-
-    (tmp_path / "new.txt").write_text("content")
-    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
-
-    config = PublicationConfig()
-    result = {"status": "success", "summary": "test"}
-    orig_call_process = git.cmd.Git._call_process
-
-    def call_process_side_effect(self, method, *args, **kwargs):
-        if method == "push":
-            return ""
-        return orig_call_process(self, method, *args, **kwargs)
-
-    with (
-        patch("palimpsest.stages.publication.git.Repo", return_value=repo),
-        patch("git.cmd.Git.custom_environment", return_value=nullcontext()) as custom_env,
-        patch.object(git.cmd.Git, "_call_process", autospec=True, side_effect=call_process_side_effect),
-    ):
-        publish_results(
-            "test-5",
-            result,
-            str(tmp_path),
-            config,
-            git_token_env="GITHUB_TOKEN",
-        )
-
-    custom_env.assert_not_called()
+    execute_args = execute_mock.call_args.args[1]
+    execute_env = execute_mock.call_args.kwargs["env"]
+    assert execute_args[:3] == ["git", "push", "--porcelain"]
+    assert execute_env["GIT_CONFIG_COUNT"] == "2"
+    assert execute_env["GIT_CONFIG_KEY_0"] == "http.extraHeader"
+    assert execute_env["GIT_CONFIG_VALUE_0"] == ""
+    assert execute_env["GIT_CONFIG_KEY_1"] == "http.extraHeader"
+    assert execute_env["GIT_CONFIG_VALUE_1"].startswith("AUTHORIZATION: basic ")
