@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import click
@@ -16,19 +19,45 @@ def main():
     pass
 
 
+def _configure_logging(verbose: bool) -> None:
+    logger.remove()
+    logger.add(sys.stderr, level="DEBUG" if verbose else "INFO")
+
+
+def _run_from_path(config_file: str, *, verbose: bool, role: str | None = None) -> None:
+    _configure_logging(verbose)
+    config = JobConfig.from_yaml(config_file)
+    if role:
+        config.role = role
+    run_job(config)
+
+
 @main.command()
 @click.argument("config_file", type=click.Path(exists=True))
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
 @click.option("--role", "-r", default=None, help="Override role name")
 def run(config_file: str, verbose: bool, role: str | None):
     """Run an agent job from a YAML config file."""
-    logger.remove()
-    logger.add(sys.stderr, level="DEBUG" if verbose else "INFO")
+    _run_from_path(config_file, verbose=verbose, role=role)
 
-    config = JobConfig.from_yaml(config_file)
-    if role:
-        config.role = role
-    run_job(config)
+
+@main.command("container-entrypoint")
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+def container_entrypoint(verbose: bool):
+    """Decode container config from the environment and run the job."""
+    payload_b64 = os.environ.get("PALIMPSEST_JOB_CONFIG_B64", "")
+    if not payload_b64:
+        raise click.ClickException("PALIMPSEST_JOB_CONFIG_B64 is not set")
+
+    try:
+        payload = base64.b64decode(payload_b64).decode("utf-8")
+    except Exception as exc:
+        raise click.ClickException(f"Invalid PALIMPSEST_JOB_CONFIG_B64 payload: {exc}")
+
+    with tempfile.TemporaryDirectory(prefix="palimpsest-job-config-") as tmpdir:
+        config_path = Path(tmpdir) / "job.yaml"
+        config_path.write_text(payload)
+        _run_from_path(str(config_path), verbose=verbose)
 
 
 @main.command("roles")

@@ -54,7 +54,7 @@ def _apply_patches(patches):
 
 def test_duplicate_tool_names_emit_runtime_issue_and_job_failed(tmp_path):
     emitter = RecordingEmitter()
-    config = JobConfig(task="x")
+    config = JobConfig(job_id="job-1", task="x")
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
 
     # Make UnifiedToolGateway raise ValueError for duplicate tools
@@ -62,6 +62,7 @@ def test_duplicate_tool_names_emit_runtime_issue_and_job_failed(tmp_path):
     patches["palimpsest.runner.UnifiedToolGateway"] = MagicMock(
         side_effect=ValueError("Duplicate tool names configured: dup_tool")
     )
+    patches["palimpsest.runner.git.Repo"] = MagicMock()
 
     with _apply_patches(patches)[0]:
         with pytest.raises(Exception):
@@ -73,7 +74,7 @@ def test_duplicate_tool_names_emit_runtime_issue_and_job_failed(tmp_path):
 def test_cleanup_issue_calls_finalize_with_gateway(tmp_path):
     """Verify finalize_workspace_after_job is called with the gateway so it can emit events."""
     emitter = RecordingEmitter()
-    config = JobConfig(task="x")
+    config = JobConfig(job_id="job-1", task="x")
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
 
     finalize_mock = MagicMock(return_value="cleanup boom")
@@ -97,7 +98,7 @@ def test_cleanup_issue_calls_finalize_with_gateway(tmp_path):
 
 def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
     emitter = RecordingEmitter()
-    config = JobConfig(task="x")
+    config = JobConfig(job_id="job-1", task="x")
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
     interaction_results = [
         {"status": "success", "summary": "first", "messages": [{"role": "user", "content": "initial"}]},
@@ -122,7 +123,7 @@ def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
 
 def test_publication_guardrail_can_fail_without_retry(tmp_path):
     emitter = RecordingEmitter()
-    config = JobConfig(task="x")
+    config = JobConfig(job_id="job-1", task="x")
     config.publication.max_recovery_attempts = 0
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
 
@@ -147,7 +148,7 @@ def test_publication_guardrail_can_fail_without_retry(tmp_path):
 def test_job_started_emitted_by_setup_workspace(tmp_path):
     """Verify setup_workspace is called with gateway and evo_sha so it can emit JobStartedData."""
     emitter = RecordingEmitter()
-    config = JobConfig(task="x")
+    config = JobConfig(job_id="job-1", task="x")
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
 
     setup_mock = MagicMock(return_value=str(tmp_path))
@@ -172,7 +173,7 @@ def test_job_started_emitted_by_setup_workspace(tmp_path):
 def test_job_timeout_emits_failed_with_timeout_code(tmp_path):
     import time as _time
     emitter = RecordingEmitter()
-    config = JobConfig(task="x", timeout=1)
+    config = JobConfig(job_id="job-1", task="x", timeout=1)
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
 
     def slow_interaction(*args, **kwargs):
@@ -181,6 +182,7 @@ def test_job_timeout_emits_failed_with_timeout_code(tmp_path):
 
     patches = _base_patches(emitter, tmp_path)
     patches["palimpsest.runner.run_interaction_loop"] = slow_interaction
+    patches["palimpsest.runner.git.Repo"] = MagicMock()
 
     with _apply_patches(patches)[0]:
         with pytest.raises(ControlledJobFailure) as exc_info:
