@@ -25,6 +25,28 @@ def _push_auth_environment(git_token_env: str) -> dict[str, str]:
     }
 
 
+def _repo_has_auth_header(repo: git.Repo) -> bool:
+    """Return True when the repo already has an http.extraHeader configured."""
+    try:
+        with repo.config_reader() as cfg:
+            for section in cfg.sections():
+                if section == "http":
+                    try:
+                        if cfg.get_value(section, "extraHeader"):
+                            return True
+                    except Exception:
+                        pass
+                if section.startswith('http "') and section.endswith('"'):
+                    try:
+                        if cfg.get_value(section, "extraHeader"):
+                            return True
+                    except Exception:
+                        pass
+    except Exception:
+        return False
+    return False
+
+
 def publish_results(
     job_id: str,
     result: dict,
@@ -61,7 +83,9 @@ def publish_results(
 
     if repo.remotes:
         logger.info(f"Pushing {branch_name}")
-        auth_env = _push_auth_environment(git_token_env)
+        auth_env = {}
+        if not _repo_has_auth_header(repo):
+            auth_env = _push_auth_environment(git_token_env)
         auth_ctx = repo.git.custom_environment(**auth_env) if auth_env else nullcontext()
         with auth_ctx:
             repo.git.push("--porcelain", "--", repo.remotes[0].name, branch_name)
