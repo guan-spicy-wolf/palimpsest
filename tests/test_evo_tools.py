@@ -1,5 +1,8 @@
 from pathlib import Path
-from palimpsest.runtime.tools import resolve_tool_functions
+
+import git
+
+from palimpsest.runtime.tools import resolve_tool_functions, spawn
 
 EVO_ROOT = Path(__file__).parent.parent / "evo"
 
@@ -57,3 +60,69 @@ class TestTaskComplete:
         func = funcs["task_complete"]
         schema = func.__tool_schema__
         assert schema["function"]["name"] == "task_complete"
+
+
+class TestSpawn:
+    def test_spawn_normalizes_prompt_and_job_spec_defaults(self, tmp_path):
+        repo = git.Repo.init(tmp_path)
+        with repo.config_writer() as writer:
+            writer.set_value("user", "name", "Test Agent")
+            writer.set_value("user", "email", "agent@example.com")
+        (tmp_path / "README.md").write_text("hello\n")
+        repo.index.add(["README.md"])
+        repo.index.commit("init")
+        repo.create_remote("origin", "https://github.com/example/repo.git")
+        repo.git.checkout("-b", "feature/parent")
+
+        emitted = []
+
+        class FakeGateway:
+            def emit(self, event):
+                emitted.append(event)
+
+        result = spawn(
+            tasks=[{"prompt": "Inspect the repository structure"}],
+            workspace=str(tmp_path),
+            gateway=FakeGateway(),
+            evo_root=str(EVO_ROOT),
+            wait_for="all_complete",
+        )
+
+        assert result.success is True
+        event = emitted[0]
+        child = event.tasks[0]
+        assert child.prompt == "Inspect the repository structure"
+        assert child.job_spec.repo == "https://github.com/example/repo.git"
+        assert child.job_spec.init_branch == "feature/parent"
+        assert child.job_spec.role == "default"
+        assert child.job_spec.evo_sha
+
+    def test_spawn_accepts_legacy_task_and_role_fields(self, tmp_path):
+        repo = git.Repo.init(tmp_path)
+        with repo.config_writer() as writer:
+            writer.set_value("user", "name", "Test Agent")
+            writer.set_value("user", "email", "agent@example.com")
+        (tmp_path / "README.md").write_text("hello\n")
+        repo.index.add(["README.md"])
+        repo.index.commit("init")
+        repo.create_remote("origin", "https://github.com/example/repo.git")
+        repo.git.checkout("-b", "main")
+
+        emitted = []
+
+        class FakeGateway:
+            def emit(self, event):
+                emitted.append(event)
+
+        result = spawn(
+            tasks=[{"task": "Review docs", "role": "default", "branch": "docs-branch"}],
+            workspace=str(tmp_path),
+            gateway=FakeGateway(),
+            evo_root=str(EVO_ROOT),
+        )
+
+        assert result.success is True
+        child = emitted[0].tasks[0]
+        assert child.prompt == "Review docs"
+        assert child.job_spec.role == "default"
+        assert child.job_spec.init_branch == "docs-branch"

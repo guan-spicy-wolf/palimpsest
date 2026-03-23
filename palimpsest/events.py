@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class BaseEvent(BaseModel):
@@ -87,6 +87,21 @@ class StageTransitionData(BaseEvent):
     to_stage: str
 
 
+class SpawnJobSpecData(BaseModel):
+    repo: str = ""
+    init_branch: str = ""
+    role: str = ""
+    evo_sha: str | None = None
+    llm: dict = Field(default_factory=dict)
+    workspace: dict = Field(default_factory=dict)
+    publication: dict = Field(default_factory=dict)
+
+
+class SpawnTaskData(BaseModel):
+    prompt: str
+    job_spec: SpawnJobSpecData = Field(default_factory=SpawnJobSpecData)
+
+
 class SpawnRequestData(BaseEvent):
     event_type: ClassVar[str] = "job.spawn.request"
     """Emitted when the agent requests child task orchestration.
@@ -94,5 +109,5 @@ class SpawnRequestData(BaseEvent):
     The runtime does NOT execute child tasks. It publishes this event
     so that the external Supervisor can pick it up and handle fork-join.
     """
-    tasks: list[dict]
+    tasks: list[SpawnTaskData]
     wait_for: str = "all_complete"

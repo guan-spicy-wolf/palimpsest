@@ -12,6 +12,9 @@ from palimpsest.config import WorkspaceConfig
 from palimpsest.events import JobStartedData
 from palimpsest.runtime.event_gateway import EventGateway
 
+_DEFAULT_GIT_USER_NAME = "Palimpsest Agent"
+_DEFAULT_GIT_USER_EMAIL = "palimpsest@local.invalid"
+
 
 def setup_workspace(
     job_id: str,
@@ -59,10 +62,14 @@ def setup_workspace(
     else:
         logger.info("Initializing empty repo")
         repo = git.Repo.init(workspace_path)
+        _ensure_repo_identity(repo)
         dummy = Path(workspace_path) / ".palimpsest"
         dummy.write_text(f"job_id: {job_id}\n")
         repo.index.add([".palimpsest"])
         repo.index.commit(f"init: workspace for job {job_id}")
+    
+    if config.repo:
+        _ensure_repo_identity(repo)
 
     if config.new_branch:
         job_branch = f"{branch_prefix}/{job_id}"
@@ -90,3 +97,25 @@ def _read_head_sha(workspace: str) -> str:
         return git.Repo(workspace).head.commit.hexsha
     except Exception:
         return ""
+
+
+def _ensure_repo_identity(repo: git.Repo) -> None:
+    """Ensure the workspace repo has a usable commit identity.
+
+    Containers and CI environments often lack global git config. Set a local
+    per-repo identity unless one is already configured.
+    """
+    reader = repo.config_reader(config_level="repository")
+    has_name = reader.has_option("user", "name")
+    has_email = reader.has_option("user", "email")
+    if has_name and has_email:
+        return
+
+    user_name = os.environ.get("PALIMPSEST_GIT_USER_NAME") or os.environ.get("GIT_AUTHOR_NAME") or _DEFAULT_GIT_USER_NAME
+    user_email = os.environ.get("PALIMPSEST_GIT_USER_EMAIL") or os.environ.get("GIT_AUTHOR_EMAIL") or _DEFAULT_GIT_USER_EMAIL
+
+    with repo.config_writer() as writer:
+        if not has_name:
+            writer.set_value("user", "name", user_name)
+        if not has_email:
+            writer.set_value("user", "email", user_email)

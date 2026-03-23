@@ -15,10 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, get_type_hints
 
+import git
 from loguru import logger
 
 from palimpsest.config import ToolsConfig
-from palimpsest.events import SpawnRequestData, ToolExecData, ToolResultData
+from palimpsest.events import SpawnRequestData, SpawnTaskData, ToolExecData, ToolResultData
 from palimpsest.runtime.event_gateway import EventGateway
 
 
@@ -55,7 +56,7 @@ def _function_to_schema(func: Callable) -> dict:
     required = []
 
     # Exclude injected runtime dependencies from schema
-    injected_args = {"workspace", "gateway"}
+    injected_args = {"workspace", "gateway", "evo_root"}
 
     for name, param in sig.parameters.items():
         if name in injected_args:
@@ -136,8 +137,84 @@ def task_complete(summary: str, status: str = "success") -> ToolResult:
     return ToolResult(success=True, output=f"[{status}] {summary}", terminal=True)
 
 
+def _infer_spawn_job_defaults(workspace: str, evo_sha: str) -> dict[str, Any]:
+    defaults: dict[str, Any] = {
+        "repo": "",
+        "init_branch": "",
+        "role": "default",
+        "evo_sha": evo_sha,
+        "llm": {},
+        "workspace": {},
+        "publication": {},
+    }
+    try:
+        repo = git.Repo(workspace)
+    except Exception:
+        return defaults
+
+    if repo.remotes:
+        defaults["repo"] = repo.remotes[0].url
+    try:
+        defaults["init_branch"] = repo.active_branch.name
+    except Exception:
+        defaults["init_branch"] = ""
+    return defaults
+
+
+def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str) -> SpawnTaskData:
+    if not isinstance(task, dict):
+        raise ValueError("Each spawn task must be an object")
+
+    prompt = str(task.get("prompt") or task.get("task") or "").strip()
+    if not prompt:
+        raise ValueError("Each spawn task requires a non-empty prompt")
+
+    defaults = _infer_spawn_job_defaults(workspace, evo_sha)
+    job_spec = dict(task.get("job_spec") or {})
+
+    role = task.get("role")
+    if not role and task.get("role_file"):
+        role_file = str(task["role_file"])
+        role = role_file.removeprefix("roles/").removesuffix(".py")
+
+    if task.get("repo") and not job_spec.get("repo"):
+        job_spec["repo"] = task["repo"]
+    if task.get("init_branch") and not job_spec.get("init_branch"):
+        job_spec["init_branch"] = task["init_branch"]
+    if task.get("branch") and not job_spec.get("init_branch"):
+        job_spec["init_branch"] = task["branch"]
+    if role and not job_spec.get("role"):
+        job_spec["role"] = role
+    if task.get("evo_sha") and not job_spec.get("evo_sha"):
+        job_spec["evo_sha"] = task["evo_sha"]
+    if task.get("role_sha") and not job_spec.get("evo_sha"):
+        job_spec["evo_sha"] = task["role_sha"]
+
+    for key in ("llm", "workspace", "publication"):
+        if isinstance(task.get(key), dict) and not job_spec.get(key):
+            job_spec[key] = dict(task[key])
+
+    normalized_job_spec = {
+        "repo": job_spec.get("repo") or defaults["repo"],
+        "init_branch": job_spec.get("init_branch") or defaults["init_branch"],
+        "role": job_spec.get("role") or defaults["role"],
+        "evo_sha": job_spec.get("evo_sha") or defaults["evo_sha"],
+        "llm": dict(job_spec.get("llm") or defaults["llm"]),
+        "workspace": dict(job_spec.get("workspace") or defaults["workspace"]),
+        "publication": dict(job_spec.get("publication") or defaults["publication"]),
+    }
+
+    return SpawnTaskData(prompt=prompt, job_spec=normalized_job_spec)
+
+
 @tool
-def spawn(tasks: list, gateway: EventGateway, evo_root: str, wait_for: str = "all_complete") -> ToolResult:
+def spawn(
+    tasks: list,
+    workspace: str,
+    gateway: EventGateway,
+    evo_root: str,
+    wait_for: str = "all_complete",
+) -> ToolResult:
     """Request the Supervisor to spawn child tasks.
     
     tasks: List of child tasks to spawn.
@@ -146,23 +223,23 @@ def spawn(tasks: list, gateway: EventGateway, evo_root: str, wait_for: str = "al
     if not tasks:
         return ToolResult(success=False, output="No tasks provided to spawn")
 
-    import git
-    from pathlib import Path
     try:
         evo_sha = git.Repo(Path(evo_root)).head.commit.hexsha
     except Exception:
         evo_sha = ""
 
-    # Translate role into specific file and sha
-    for task in tasks:
-        if "role" in task:
-            role_name = task.pop("role")
-            task["role_file"] = f"roles/{role_name}.py"
-            task["role_sha"] = evo_sha
+    normalized_tasks: list[SpawnTaskData] = []
+    try:
+        for task in tasks:
+            normalized_tasks.append(
+                _normalize_spawn_task(task, workspace=workspace, evo_sha=evo_sha)
+            )
+    except ValueError as exc:
+        return ToolResult(success=False, output=str(exc))
 
     gateway.emit(
         SpawnRequestData(
-            tasks=tasks,
+            tasks=normalized_tasks,
             wait_for=wait_for,
         )
     )
