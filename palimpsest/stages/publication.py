@@ -64,7 +64,7 @@ def publish_results(
         auth_env = _push_auth_environment(git_token_env)
         auth_ctx = repo.git.custom_environment(**auth_env) if auth_env else nullcontext()
         with auth_ctx:
-            repo.remotes[0].push(branch_name)
+            repo.git.push("--porcelain", "--", repo.remotes[0].name, branch_name)
     else:
         logger.warning("No remote configured, skipping push")
 

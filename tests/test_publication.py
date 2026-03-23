@@ -66,9 +66,17 @@ def test_publication_push_uses_git_token_env_for_authenticated_https(monkeypatch
     config = PublicationConfig()
     result = {"status": "success", "summary": "test"}
 
+    orig_call_process = git.cmd.Git._call_process
+
+    def call_process_side_effect(self, method, *args, **kwargs):
+        if method == "push":
+            return ""
+        return orig_call_process(self, method, *args, **kwargs)
+
     with (
+        patch("palimpsest.stages.publication.git.Repo", return_value=repo),
         patch("git.cmd.Git.custom_environment", return_value=nullcontext()) as custom_env,
-        patch.object(git.Remote, "push", return_value=[]),
+        patch.object(git.cmd.Git, "_call_process", autospec=True, side_effect=call_process_side_effect) as call_process,
     ):
         publish_results(
             "test-4",
@@ -79,6 +87,7 @@ def test_publication_push_uses_git_token_env_for_authenticated_https(monkeypatch
         )
 
     custom_env.assert_called_once()
+    assert call_process.call_args.args[1] == "push"
     env_kwargs = custom_env.call_args.kwargs
     assert env_kwargs["GIT_CONFIG_COUNT"] == "1"
     assert env_kwargs["GIT_CONFIG_KEY_0"] == "http.extraHeader"
