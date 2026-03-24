@@ -7,8 +7,8 @@ from palimpsest.events import (
     JobCompletedData,
     JobFailedData,
     JobStartedData,
+    JobStartedData,
     RuntimeIssueData,
-    TaskUpdatedData,
 )
 from palimpsest.runtime.roles import JobSpec
 from palimpsest.runner import ControlledJobFailure, _run_job_from_spec
@@ -97,7 +97,6 @@ def test_cleanup_issue_calls_finalize_with_gateway(tmp_path):
         _run_job_from_spec(config, spec, tmp_path)
 
     assert any(isinstance(event, JobCompletedData) for event in emitter.events)
-    assert any(isinstance(event, TaskUpdatedData) and event.status == "complete" for event in emitter.events)
     # Verify finalize was called with gateway kwarg (stage handles event emission)
     finalize_mock.assert_called_once()
     _, kwargs = finalize_mock.call_args
@@ -110,8 +109,8 @@ def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
     config = JobConfig(job_id="job-1", task="x")
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
     interaction_results = [
-        {"task_status": "complete", "summary": "first", "messages": [{"role": "user", "content": "initial"}]},
-        {"task_status": "complete", "summary": "fixed", "messages": [{"role": "user", "content": "initial"}]},
+        {"summary": "first", "messages": [{"role": "user", "content": "initial"}]},
+        {"summary": "fixed", "messages": [{"role": "user", "content": "initial"}]},
     ]
 
     interaction_mock = MagicMock(side_effect=interaction_results)
@@ -136,7 +135,7 @@ def test_publication_guardrail_can_fail_without_retry(tmp_path):
     config.publication.max_recovery_attempts = 0
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
 
-    interaction_mock = MagicMock(return_value={"task_status": "complete", "summary": "first", "messages": []})
+    interaction_mock = MagicMock(return_value={"summary": "first", "messages": []})
     patches = _base_patches(emitter, tmp_path)
     patches["palimpsest.runner.run_interaction_loop"] = interaction_mock
     patches["palimpsest.runner.git.Repo"] = MagicMock()
@@ -189,7 +188,7 @@ def test_job_timeout_emits_failed_with_timeout_code(tmp_path):
 
     def slow_interaction(*args, **kwargs):
         _time.sleep(3)
-        return {"task_status": "complete", "summary": "ok", "messages": []}
+        return {"summary": "ok", "messages": []}
 
     patches = _base_patches(emitter, tmp_path)
     patches["palimpsest.runner.run_interaction_loop"] = slow_interaction

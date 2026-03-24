@@ -13,10 +13,13 @@ from yoitsu_contracts.events import (
     StageTransitionData,
     SupervisorCheckpointData,
     SupervisorJobLaunchedData,
-    TaskSubmitData,
-    TaskUpdatedData,
     ToolExecData,
     ToolResultData,
+    TriggerData,
+    TaskCreatedData,
+    TaskCompletedData,
+    TaskFailedData,
+    TaskCancelledData,
 )
 
 __all__ = [
@@ -34,8 +37,11 @@ __all__ = [
     "StageTransitionData",
     "SupervisorCheckpointData",
     "SupervisorJobLaunchedData",
-    "TaskSubmitData",
-    "TaskUpdatedData",
     "ToolExecData",
     "ToolResultData",
+    "TriggerData",
+    "TaskCreatedData",
+    "TaskCompletedData",
+    "TaskFailedData",
+    "TaskCancelledData",
 ]

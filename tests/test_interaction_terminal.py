@@ -43,23 +43,23 @@ class FakeTools:
 
 
 def test_interaction_loop_stops_on_terminal():
-    llm = FakeLLM([(None, [("task_complete", {"summary": "done", "status": "success"})])])
+    llm = FakeLLM([(None, [("task_complete", {"summary": "done"})])])
     tools = FakeTools()
     context = {"system": "test agent", "task": "do nothing"}
     result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
     assert llm.call_count == 1
-    assert result["task_status"] == "complete"
+    assert "summary" in result
 
 
 def test_interaction_loop_terminal_mid_batch():
     llm = FakeLLM(
-        [(None, [("bash", {"command": "echo hi"}), ("task_complete", {"summary": "done", "status": "success"})])]
+        [(None, [("bash", {"command": "echo hi"}), ("task_complete", {"summary": "done"})])]
     )
     tools = FakeTools()
     context = {"system": "test agent", "task": "do something then complete"}
     result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
     assert llm.call_count == 1
-    assert result["task_status"] == "complete"
+    assert "summary" in result
 
 
 def test_interaction_loop_repompts_then_marks_in_progress():
@@ -71,13 +71,12 @@ def test_interaction_loop_repompts_then_marks_in_progress():
     context = {"system": "test agent", "task": "do nothing"}
     result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
     assert llm.call_count == 2
-    assert result["task_status"] == "in_progress"
     assert result["summary"] == "Still not calling task_complete."
 
 
 def test_interaction_loop_can_resume_with_user_prompt():
     llm = FakeLLM([
-        (None, [("task_complete", {"summary": "fixed", "status": "success"})]),
+        (None, [("task_complete", {"summary": "fixed"})]),
     ])
     tools = FakeTools()
     context = {"system": "test agent", "task": "do nothing"}
@@ -93,7 +92,7 @@ def test_interaction_loop_can_resume_with_user_prompt():
         user_prompt="Please fix publication issues and complete.",
     )
     assert llm.call_count == 1
-    assert result["task_status"] == "complete"
+    assert "summary" in result
     assert any(
         message["role"] == "user" and "publication issues" in message["content"]
         for message in result["messages"]
@@ -115,4 +114,4 @@ def test_non_task_complete_terminal_is_ignored():
     tools = NonTaskTerminalTools()
     context = {"system": "test agent", "task": "do nothing"}
     result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
-    assert result["task_status"] == "in_progress"
+    assert "summary" in result

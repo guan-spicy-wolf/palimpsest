@@ -8,11 +8,6 @@ from loguru import logger
 from palimpsest.runtime.llm import LLMGateway
 from palimpsest.runtime.tools import UnifiedToolGateway
 
-_TASK_STATUS_ALIASES = {
-    "success": "complete",
-    "partial": "in_progress",
-}
-
 
 # ---------------------------------------------------------------------------
 # One-shot loop warnings
@@ -48,8 +43,8 @@ def _build_loop_warnings(max_iterations: int) -> list[LoopWarning]:
             trigger=lambda r, n=warn_at: r <= n,
             message=lambda r: (
                 f"[Runtime] 你还剩 {r} 次迭代机会。"
-                "如果任务尚未完成，请尽快收尾并调用 task_complete，"
-                "将 status 设为 'in_progress' 并说明已完成和未完成的部分。"
+                "如果你认为该 Job 的工作已告一段落，请尽快调用 task_complete 进行收尾，"
+                "并提供 summary 说明已完成和未完成的部分。"
             ),
         ),
     ]
@@ -65,12 +60,12 @@ def run_interaction_loop(
     messages: list[dict] | None = None,
     user_prompt: str | None = None,
 ) -> dict:
-    """Core agent loop. Returns {"task_status": str, "summary": str}.
+    """Core agent loop. Returns {"summary": str, "messages": list}.
 
     Completion is determined by the runtime:
-      - Explicit task_complete tool call → task state selected by the agent
-      - LLM stops calling tools without task_complete → confirm once, then in_progress
-      - Max iterations reached → in_progress
+      - Explicit task_complete tool call → interaction loop ends
+      - LLM stops calling tools without task_complete → confirm once, then end
+      - Max iterations reached → end
     """
     if messages is None:
         messages = [{"role": "user", "content": context["task"]}]
@@ -107,21 +102,18 @@ def run_interaction_loop(
                     {
                         "role": "user",
                         "content": (
-                            "如果你已经完成任务，请显式调用 `task_complete` 并提供 `summary` 与 `status`。"
+                            "如果你已经完成了这个 Job 的所有工作，请显式调用 `task_complete` 并提供 `summary`。"
                             "如果尚未完成，请继续调用必要的工具推进，不要直接结束。"
                         ),
                     }
                 )
                 continue
 
-            logger.info("LLM finished without task_complete after confirmation; marking in_progress")
+            logger.info("LLM finished without task_complete after confirmation; ending loop")
             summary = (response.text or "").strip()
             if not summary:
                 summary = "LLM stopped without explicit task_complete."
-            task_status = "in_progress"
             return {
-                "status": task_status,
-                "task_status": task_status,
                 "summary": summary[:500],
                 "messages": messages,
             }
@@ -138,27 +130,14 @@ def run_interaction_loop(
                     continue
 
                 logger.info("Runtime received terminal signal from task_complete")
-                status = _normalize_task_status(tc.arguments.get("status", "complete"))
                 summary = tc.arguments.get("summary", result.output)
                 return {
-                    "status": status,
-                    "task_status": status,
                     "summary": (summary or "")[:500],
                     "messages": messages,
                 }
 
     logger.warning(f"Stopped after {max_iterations} iterations")
-    task_status = "in_progress"
     return {
-        "status": task_status,
-        "task_status": task_status,
         "summary": f"Stopped after {max_iterations} iterations",
         "messages": messages,
     }
-
-
-def _normalize_task_status(status: str) -> str:
-    normalized = _TASK_STATUS_ALIASES.get(status, status)
-    if normalized in {"complete", "failed", "in_progress", "blocked", "needs_review"}:
-        return normalized
-    return "in_progress"

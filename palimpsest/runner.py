@@ -28,7 +28,6 @@ from palimpsest.events import (
     JobCompletedData,
     JobFailedData,
     RuntimeIssueData,
-    TaskUpdatedData,
 )
 from palimpsest.runtime import (
     EventGateway,
@@ -122,18 +121,12 @@ def _run_job_from_spec(
         )
 
         gateway.emit(
-            TaskUpdatedData(
-                status=result["task_status"],
-                summary=result.get("summary", ""),
-            )
-        )
-        gateway.emit(
             JobCompletedData(
                 git_ref=git_ref,
                 summary=result.get("summary", ""),
             )
         )
-        logger.info(f"Job {job_id} completed with task_status={result['task_status']}")
+        logger.info(f"Job {job_id} completed")
 
     except ControlledJobFailure as exc:
         error_msg = str(exc)

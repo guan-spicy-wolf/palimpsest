@@ -50,7 +50,7 @@ class TestFileOps:
 class TestTaskComplete:
     def test_returns_terminal(self):
         funcs = resolve_tool_functions(EVO_ROOT, ["task_complete"])
-        result = funcs["task_complete"](summary="all done", status="success")
+        result = funcs["task_complete"](summary="all done")
         assert result.success
         assert result.terminal is True
         assert "all done" in result.output
