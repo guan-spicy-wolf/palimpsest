@@ -13,6 +13,7 @@ dependencies = [
     "gitpython>=3.1",
     "loguru>=0.7",
     "click>=8.1",
+    "yoitsu-contracts",
 ]
 
 [project.scripts]
@@ -20,6 +21,9 @@ palimpsest = "palimpsest.cli:main"
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+yoitsu-contracts = { path = "../yoitsu-contracts" }
 
 [tool.setuptools.packages.find]
 include = ["palimpsest*"]

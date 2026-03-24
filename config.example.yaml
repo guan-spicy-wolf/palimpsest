@@ -1,8 +1,9 @@
+task_id: "smoke-task"
 task: "A simple smoke test task: increase version by 0.0.1"
 role: "default"
 
 workspace:
-  repo: "https://github.com/morrejssc-hub/palimpsest-test.git"
+  repo: "https://github.com/guan-spicy-wolf/palimpsest-test.git"
   init_branch: "main"
   depth: 1
   git_token_env: "GITHUB_TOKEN"

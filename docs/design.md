@@ -1,32 +1,71 @@
-# Palimpsest — Design
+# Palimpsest Design
 
-Palimpsest is the **skeleton**: immutable, single-job execution engine. It does one thing — run a task and emit events. The **evo repo** is the muscle: prompts, context providers, tools, and roles that the agent evolves freely.
+Palimpsest is the stable runtime skeleton. It executes exactly one job configuration and emits the corresponding events.
 
-All roles, tools, and context providers are defined in pure Python (not YAML). This eliminates runtime failures from config syntax errors and lets the LLM work with type-checked code rather than opaque configuration.
+The evo repo remains the free surface:
 
-## Key Decisions
+- prompts
+- roles
+- context providers
+- evo-defined tools
 
-**Role is a template, not runtime identity.** A Role is expanded into a flat `JobSpec` at job creation time. After that, the role name is never referenced — the Runtime operates solely on the `JobSpec`. This means roles can be freely renamed or restructured without affecting in-flight jobs.
+## Core Decisions
 
-**Evo providers are loaded in isolated scopes.** Provider files from the evo repo are loaded via `importlib` into isolated namespaces, never registered in `sys.modules`. Each job gets a fresh load; providers can be swapped between jobs without restart and cannot pollute the Runtime's namespace.
+### 1. Role Resolves To A Flat Job Spec
 
-**Only `task_complete` can end the interaction loop successfully.** If the LLM stops producing tool calls, the Runtime sends one follow-up prompt requesting explicit completion. `terminal=True` from any other tool is ignored. This prevents premature job endings from ambiguous LLM behavior.
+Roles are authoring conveniences. At runtime Palimpsest resolves a role into:
 
-**Publication guardrails re-enter the agent loop rather than fail immediately.** When guardrails fire and recovery attempts remain, the Runtime injects a user message explaining the issue and resumes the loop with the accumulated message history. The agent must call `task_complete` again after fixing the problem. This avoids starting a new job for recoverable issues.
+- prompt text
+- context template
+- evo tool names
+
+After resolution, the runtime only sees the flat job spec.
+
+### 2. Context And Tools Stay Python-Native
+
+Evo providers are loaded with isolated `importlib` scopes. They do not leak into `sys.modules`, and they can be replaced between jobs without restarting the runtime.
+
+### 3. Task State And Job Result Are Separate
+
+The interaction loop produces a task state:
+
+- `complete`
+- `failed`
+- `in_progress`
+- `blocked`
+- `needs_review`
+
+After publication succeeds, the runtime emits:
+
+- `task.updated`
+- `job.completed`
+
+If the runtime itself fails, it emits `job.failed`.
+
+### 4. Publication Guardrails Re-enter The Loop
+
+If publication guardrails fail but recovery attempts remain, Palimpsest injects a user message and returns to the interaction loop with preserved conversation state. The job does not fork or schedule additional work by itself.
+
+### 5. Join Context Is Still Runtime Context, Not Scheduler Logic
+
+Join jobs are ordinary jobs from Palimpsest's perspective. The only difference is that their job config may contain join context metadata, which context providers can use to query Pasloe and reconstruct child task state.
 
 ## Pipeline
 
-Four sequential stages: workspace → context → interaction → publication.
+The runtime pipeline is:
 
-The interaction and publication stages are coupled via the recovery mechanism above — it is the only non-linear part of the pipeline.
+1. workspace
+2. context
+3. interaction
+4. publication
 
-Job status semantics:
-- `success` — agent called `task_complete` and publication succeeded
-- `partial` — agent stopped without completing (iteration limit, provider errors, etc.); changes are committed with a `wip:` prefix and pushed
-- `failed` — agent explicitly declared failure, or a runtime constraint was violated; nothing is pushed
+The pipeline is linear except for the publication-recovery loop.
 
-## What This Repo Does NOT Do
+## Non-Goals
 
-- **Orchestration** — no fork-join, no retry policy, no version state machine. That is Trenni's responsibility.
-- **Event querying** — the Runtime only emits. Trenni queries.
-- **Evo version selection** — the Runtime reads whatever is checked out at `./evo` and records the SHA. Trenni controls which commit is active.
+- no scheduling
+- no replay
+- no checkpointing
+- no worker-capacity management
+- no event-stream ownership
+- no evo version selection policy

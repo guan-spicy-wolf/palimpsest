@@ -19,13 +19,16 @@ class EventGateway:
     from directly emitting unauthorized system events.
     """
 
-    def __init__(self, emitter: EventEmitter, job_id: str = ""):
+    def __init__(self, emitter: EventEmitter, job_id: str = "", task_id: str = ""):
         self.__emitter = emitter
         self._job_id = job_id
+        self._task_id = task_id
 
     def emit(self, event: BaseEvent) -> None:
-        """Inject contextual job_id and forward event securely to emitter."""
+        """Inject contextual ids and forward event securely to emitter."""
         event.job_id = self._job_id
+        if not getattr(event, "task_id", ""):
+            event.task_id = self._task_id
         self.__emitter.emit(event)
 
     def close(self) -> None:

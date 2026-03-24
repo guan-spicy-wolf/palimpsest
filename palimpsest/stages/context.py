@@ -11,6 +11,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from palimpsest.config import JobConfig
 from palimpsest.runtime.contexts import resolve_context_functions
 from palimpsest.runtime.event_gateway import EventGateway
 from palimpsest.runtime.roles import JobSpec
@@ -21,6 +22,7 @@ def build_context(
     workspace_path: str,
     task: str,
     spec: JobSpec,
+    job_config: JobConfig,
     gateway: EventGateway,
     evo_root: Path | None = None,
 ) -> dict:
@@ -55,7 +57,11 @@ def build_context(
                     kwargs["job_id"] = job_id
                 if "task" in sig.parameters:
                     kwargs["task"] = task
-                    
+                if "job_config" in sig.parameters:
+                    kwargs["job_config"] = job_config
+                if "eventstore" in sig.parameters:
+                    kwargs["eventstore"] = job_config.eventstore
+
                 content = provider_fn(**kwargs)
                 parts.append(str(content))
             except Exception as exc:

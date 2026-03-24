@@ -127,12 +127,12 @@ def bash(command: str, workspace: str, config: ToolsConfig | None = None) -> Too
 
 
 @tool
-def task_complete(summary: str, status: str = "success") -> ToolResult:
-    """Signal that the task is complete. Always call this when done.
+def task_complete(summary: str, status: str = "complete") -> ToolResult:
+    """Signal the current task state and end this job run.
 
     Args:
         summary: Brief summary of what was accomplished.
-        status: 'success' if fully complete, 'partial' if only partially done.
+        status: One of complete, failed, in_progress, blocked, needs_review.
     """
     return ToolResult(success=True, output=f"[{status}] {summary}", terminal=True)
 
@@ -214,11 +214,13 @@ def spawn(
     gateway: EventGateway,
     evo_root: str,
     wait_for: str = "all_complete",
+    on_fail: str = "continue",
 ) -> ToolResult:
     """Request the Supervisor to spawn child tasks.
     
     tasks: List of child tasks to spawn.
-    wait_for: Trigger condition ('all_complete' or 'any_failed').
+    wait_for: Join condition ('all_complete' or 'any_success').
+    on_fail: Failure policy ('continue' or 'cancel_siblings').
     """
     if not tasks:
         return ToolResult(success=False, output="No tasks provided to spawn")
@@ -241,6 +243,7 @@ def spawn(
         SpawnRequestData(
             tasks=normalized_tasks,
             wait_for=wait_for,
+            on_fail=on_fail,
         )
     )
 
@@ -248,7 +251,8 @@ def spawn(
         success=True,
         output=(
             f"Spawn request emitted for {len(tasks)} child task(s) "
-            f"(wait_for={wait_for}). The Supervisor will handle orchestration."
+            f"(wait_for={wait_for}, on_fail={on_fail}). "
+            "The Supervisor will handle orchestration."
         ),
     )
 

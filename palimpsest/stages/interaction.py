@@ -8,6 +8,11 @@ from loguru import logger
 from palimpsest.runtime.llm import LLMGateway
 from palimpsest.runtime.tools import UnifiedToolGateway
 
+_TASK_STATUS_ALIASES = {
+    "success": "complete",
+    "partial": "in_progress",
+}
+
 
 # ---------------------------------------------------------------------------
 # One-shot loop warnings
@@ -44,7 +49,7 @@ def _build_loop_warnings(max_iterations: int) -> list[LoopWarning]:
             message=lambda r: (
                 f"[Runtime] 你还剩 {r} 次迭代机会。"
                 "如果任务尚未完成，请尽快收尾并调用 task_complete，"
-                "将 status 设为 'partial' 并说明已完成和未完成的部分。"
+                "将 status 设为 'in_progress' 并说明已完成和未完成的部分。"
             ),
         ),
     ]
@@ -60,12 +65,12 @@ def run_interaction_loop(
     messages: list[dict] | None = None,
     user_prompt: str | None = None,
 ) -> dict:
-    """Core agent loop. Returns {"status": str, "summary": str}.
+    """Core agent loop. Returns {"task_status": str, "summary": str}.
 
     Completion is determined by the runtime:
-      - Explicit task_complete tool call → success/partial
-      - LLM stops calling tools without task_complete → confirm once, then partial
-      - Max iterations reached → partial
+      - Explicit task_complete tool call → task state selected by the agent
+      - LLM stops calling tools without task_complete → confirm once, then in_progress
+      - Max iterations reached → in_progress
     """
     if messages is None:
         messages = [{"role": "user", "content": context["task"]}]
@@ -109,11 +114,17 @@ def run_interaction_loop(
                 )
                 continue
 
-            logger.info("LLM finished without task_complete after confirmation; marking partial")
+            logger.info("LLM finished without task_complete after confirmation; marking in_progress")
             summary = (response.text or "").strip()
             if not summary:
                 summary = "LLM stopped without explicit task_complete."
-            return {"status": "partial", "summary": summary[:500], "messages": messages}
+            task_status = "in_progress"
+            return {
+                "status": task_status,
+                "task_status": task_status,
+                "summary": summary[:500],
+                "messages": messages,
+            }
 
         for tc in response.tool_calls:
             result = tools.execute(tc.name, tc.id, tc.arguments, workspace_path)
@@ -127,17 +138,27 @@ def run_interaction_loop(
                     continue
 
                 logger.info("Runtime received terminal signal from task_complete")
-                status = tc.arguments.get("status", "success")
+                status = _normalize_task_status(tc.arguments.get("status", "complete"))
                 summary = tc.arguments.get("summary", result.output)
                 return {
                     "status": status,
+                    "task_status": status,
                     "summary": (summary or "")[:500],
                     "messages": messages,
                 }
 
     logger.warning(f"Stopped after {max_iterations} iterations")
+    task_status = "in_progress"
     return {
-        "status": "partial",
+        "status": task_status,
+        "task_status": task_status,
         "summary": f"Stopped after {max_iterations} iterations",
         "messages": messages,
     }
+
+
+def _normalize_task_status(status: str) -> str:
+    normalized = _TASK_STATUS_ALIASES.get(status, status)
+    if normalized in {"complete", "failed", "in_progress", "blocked", "needs_review"}:
+        return normalized
+    return "in_progress"

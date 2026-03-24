@@ -48,7 +48,7 @@ def test_interaction_loop_stops_on_terminal():
     context = {"system": "test agent", "task": "do nothing"}
     result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
     assert llm.call_count == 1
-    assert result["status"] == "success"
+    assert result["task_status"] == "complete"
 
 
 def test_interaction_loop_terminal_mid_batch():
@@ -59,10 +59,10 @@ def test_interaction_loop_terminal_mid_batch():
     context = {"system": "test agent", "task": "do something then complete"}
     result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
     assert llm.call_count == 1
-    assert result["status"] == "success"
+    assert result["task_status"] == "complete"
 
 
-def test_interaction_loop_repompts_then_marks_partial():
+def test_interaction_loop_repompts_then_marks_in_progress():
     llm = FakeLLM([
         ("I think I am done.", []),
         ("Still not calling task_complete.", []),
@@ -71,7 +71,7 @@ def test_interaction_loop_repompts_then_marks_partial():
     context = {"system": "test agent", "task": "do nothing"}
     result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
     assert llm.call_count == 2
-    assert result["status"] == "partial"
+    assert result["task_status"] == "in_progress"
     assert result["summary"] == "Still not calling task_complete."
 
 
@@ -93,7 +93,7 @@ def test_interaction_loop_can_resume_with_user_prompt():
         user_prompt="Please fix publication issues and complete.",
     )
     assert llm.call_count == 1
-    assert result["status"] == "success"
+    assert result["task_status"] == "complete"
     assert any(
         message["role"] == "user" and "publication issues" in message["content"]
         for message in result["messages"]
@@ -115,4 +115,4 @@ def test_non_task_complete_terminal_is_ignored():
     tools = NonTaskTerminalTools()
     context = {"system": "test agent", "task": "do nothing"}
     result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
-    assert result["status"] == "partial"
+    assert result["task_status"] == "in_progress"

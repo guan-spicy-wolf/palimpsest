@@ -28,6 +28,7 @@ from palimpsest.events import (
     JobCompletedData,
     JobFailedData,
     RuntimeIssueData,
+    TaskUpdatedData,
 )
 from palimpsest.runtime import (
     EventGateway,
@@ -85,7 +86,8 @@ def _run_job_from_spec(
         raise ValueError("Job ID must be specified in the configuration.")
 
     emitter = EventEmitter(config.eventstore)
-    gateway = EventGateway(emitter, job_id)
+    task_id = config.task_id or job_id
+    gateway = EventGateway(emitter, job_id, task_id)
 
     evo_sha = _read_evo_sha(evo_path)
     logger.info(f"Starting job {job_id} (evo={evo_sha[:8] if evo_sha else '?'})")
@@ -108,7 +110,7 @@ def _run_job_from_spec(
 
         # Stage 2: Context (emits stage-transition internally)
         context = build_context(
-            job_id, workspace, config.task, spec, gateway, evo_root=evo_path,
+            job_id, workspace, config.task, spec, config, gateway, evo_root=evo_path,
         )
 
         # Stage 3+4: Interaction and publication
@@ -120,13 +122,18 @@ def _run_job_from_spec(
         )
 
         gateway.emit(
+            TaskUpdatedData(
+                status=result["task_status"],
+                summary=result.get("summary", ""),
+            )
+        )
+        gateway.emit(
             JobCompletedData(
-                status=result["status"],
                 git_ref=git_ref,
                 summary=result.get("summary", ""),
             )
         )
-        logger.info(f"Job {job_id} completed: {result['status']}")
+        logger.info(f"Job {job_id} completed with task_status={result['task_status']}")
 
     except ControlledJobFailure as exc:
         error_msg = str(exc)

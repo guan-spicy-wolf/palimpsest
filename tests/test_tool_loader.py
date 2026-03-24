@@ -43,5 +43,5 @@ def test_unified_gateway_with_evo_tools(tmp_path):
     gateway = MagicMock()
     gw = UnifiedToolGateway(config, tmp_path, ["echo"], gateway)
     schemas = gw.schema()
-    assert len(schemas) == 1
-    assert schemas[0]["function"]["name"] == "echo"
+    names = [schema["function"]["name"] for schema in schemas]
+    assert names == ["task_complete", "echo"]
