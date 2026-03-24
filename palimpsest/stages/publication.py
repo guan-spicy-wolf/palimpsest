@@ -60,9 +60,9 @@ def publish_results(
     repo = git.Repo(workspace_path)
     repo.git.add("-A")
 
-    status = result.get("task_status") or result.get("status", "complete")
+    status = result.get("status", "completed")
     summary = result.get("summary", "")[:500]
-    commit_prefix = "wip" if status in {"in_progress", "blocked", "needs_review"} else "feat"
+    commit_prefix = "feat"
     if repo.is_dirty(index=True) or repo.untracked_files:
         commit = repo.index.commit(f"{commit_prefix}: palimpsest job {job_id}\n\n{summary}")
         logger.info(f"Committed {commit.hexsha[:8]}")

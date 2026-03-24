@@ -25,22 +25,16 @@ After resolution, the runtime only sees the flat job spec.
 
 Evo providers are loaded with isolated `importlib` scopes. They do not leak into `sys.modules`, and they can be replaced between jobs without restarting the runtime.
 
-### 3. Task State And Job Result Are Separate
+### 3. Task Lifecycle Is Owned By Trenni
 
-The interaction loop produces a task state:
+Palimpsest does not infer or broadcast task state. It only manages execution of a single job:
 
-- `complete`
-- `failed`
-- `in_progress`
-- `blocked`
-- `needs_review`
-
-After publication succeeds, the runtime emits:
-
-- `task.updated`
-- `job.completed`
+- `task_complete` tool ends the interaction loop (pure flow control)
+- publication commits changes and emits `job.completed`
 
 If the runtime itself fails, it emits `job.failed`.
+
+Trenni observes these job events and structurally derives whether the parent task has reached a terminal state (`task.completed`, `task.failed`, `task.cancelled`).
 
 ### 4. Publication Guardrails Re-enter The Loop
 
