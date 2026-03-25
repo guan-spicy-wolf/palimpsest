@@ -1,4 +1,5 @@
 from yoitsu_contracts.config import (
+    EvalContextConfig,
     EventStoreConfig,
     JobConfig,
     JobContextConfig,
@@ -11,6 +12,7 @@ from yoitsu_contracts.config import (
 
 __all__ = [
     "EventStoreConfig",
+    "EvalContextConfig",
     "JobConfig",
     "JobContextConfig",
     "JoinContextConfig",

@@ -1,5 +1,6 @@
 from yoitsu_contracts.events import (
     BaseEvent,
+    EvalSpec,
     JobCancelledData,
     JobCompletedData,
     JobFailedData,
@@ -12,7 +13,11 @@ from yoitsu_contracts.events import (
     SpawnTaskData,
     StageTransitionData,
     SupervisorCheckpointData,
+    SupervisorJobEnqueuedData,
     SupervisorJobLaunchedData,
+    TaskEvaluatingData,
+    TaskEvalFailedData,
+    TaskResult,
     ToolExecData,
     ToolResultData,
     TriggerData,
@@ -24,6 +29,7 @@ from yoitsu_contracts.events import (
 
 __all__ = [
     "BaseEvent",
+    "EvalSpec",
     "JobCancelledData",
     "JobCompletedData",
     "JobFailedData",
@@ -36,7 +42,11 @@ __all__ = [
     "SpawnTaskData",
     "StageTransitionData",
     "SupervisorCheckpointData",
+    "SupervisorJobEnqueuedData",
     "SupervisorJobLaunchedData",
+    "TaskEvaluatingData",
+    "TaskEvalFailedData",
+    "TaskResult",
     "ToolExecData",
     "ToolResultData",
     "TriggerData",

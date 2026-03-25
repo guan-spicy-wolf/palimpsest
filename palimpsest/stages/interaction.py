@@ -60,7 +60,7 @@ def run_interaction_loop(
     messages: list[dict] | None = None,
     user_prompt: str | None = None,
 ) -> dict:
-    """Core agent loop. Returns {"summary": str, "messages": list}.
+    """Core agent loop. Returns {"summary": str, "status": str, "messages": list}.
 
     Completion is determined by the runtime:
       - Explicit task_complete tool call → interaction loop ends
@@ -115,6 +115,7 @@ def run_interaction_loop(
                 summary = "LLM stopped without explicit task_complete."
             return {
                 "summary": summary[:500],
+                "status": "incomplete",
                 "messages": messages,
             }
 
@@ -131,13 +132,16 @@ def run_interaction_loop(
 
                 logger.info("Runtime received terminal signal from task_complete")
                 summary = tc.arguments.get("summary", result.output)
+                status = str(tc.arguments.get("status", "complete") or "complete")
                 return {
                     "summary": (summary or "")[:500],
+                    "status": status,
                     "messages": messages,
                 }
 
     logger.warning(f"Stopped after {max_iterations} iterations")
     return {
         "summary": f"Stopped after {max_iterations} iterations",
+        "status": "max_iterations",
         "messages": messages,
     }

@@ -19,7 +19,7 @@ import git
 from loguru import logger
 
 from palimpsest.config import ToolsConfig
-from palimpsest.events import SpawnRequestData, SpawnTaskData, ToolExecData, ToolResultData
+from palimpsest.events import EvalSpec, SpawnRequestData, SpawnTaskData, ToolExecData, ToolResultData
 from palimpsest.runtime.event_gateway import EventGateway
 
 
@@ -204,7 +204,9 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
         "publication": dict(job_spec.get("publication") or defaults["publication"]),
     }
 
-    return SpawnTaskData(prompt=prompt, job_spec=normalized_job_spec)
+    eval_spec = task.get("eval_spec")
+    normalized_eval_spec = EvalSpec.model_validate(eval_spec) if isinstance(eval_spec, dict) else None
+    return SpawnTaskData(prompt=prompt, job_spec=normalized_job_spec, eval_spec=normalized_eval_spec)
 
 
 @tool
@@ -219,6 +221,8 @@ def spawn(
     """Request the Supervisor to spawn child tasks.
     
     tasks: List of child tasks to spawn.
+      Optional per-task `eval_spec`:
+      {"role": "...", "deliverables": ["..."], "criteria": ["..."], "metadata": {...}}
     wait_for: Join condition ('all_complete' or 'any_success').
     on_fail: Failure policy ('continue' or 'cancel_siblings').
     """

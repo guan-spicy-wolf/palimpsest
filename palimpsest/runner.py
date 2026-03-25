@@ -124,6 +124,7 @@ def _run_job_from_spec(
             JobCompletedData(
                 git_ref=git_ref,
                 summary=result.get("summary", ""),
+                status=str(result.get("status", "complete") or "complete"),
             )
         )
         logger.info(f"Job {job_id} completed")
