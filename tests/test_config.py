@@ -17,6 +17,7 @@ def test_job_config_accepts_publication_strategy(tmp_path: Path):
 
     assert parsed.publication.strategy == "branch"
     assert parsed.publication.branch_prefix == "palimpsest/job"
+    assert parsed.team == "default"
 
 
 def test_job_config_parses_extended_llm_budgets(tmp_path: Path):

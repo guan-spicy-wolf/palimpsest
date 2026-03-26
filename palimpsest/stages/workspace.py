@@ -60,22 +60,17 @@ def setup_workspace(
             **clone_kwargs,
         )
     else:
-        logger.info("Initializing empty repo")
-        repo = git.Repo.init(workspace_path)
-        _ensure_repo_identity(repo)
-        dummy = Path(workspace_path) / ".palimpsest"
-        dummy.write_text(f"job_id: {job_id}\n")
-        repo.index.add([".palimpsest"])
-        repo.index.commit(f"init: workspace for job {job_id}")
+        logger.info("Using repoless scratch workspace")
+        repo = None
     
-    if config.repo:
+    if repo is not None and config.repo:
         _ensure_repo_identity(repo)
 
-    if config.new_branch:
+    if repo is not None and config.new_branch:
         job_branch = f"{branch_prefix}/{job_id}"
         repo.git.checkout("-b", job_branch)
         logger.info(f"Created branch: {job_branch}")
-    else:
+    elif repo is not None:
         logger.info(f"Working directly on branch: {config.init_branch}")
 
     if gateway:

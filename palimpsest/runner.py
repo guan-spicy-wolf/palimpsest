@@ -105,7 +105,10 @@ def _run_job_from_spec(
         )
 
         # Capture base SHA before any agent modifications (used by guardrails).
-        base_sha = git.Repo(workspace).head.commit.hexsha
+        try:
+            base_sha = git.Repo(workspace).head.commit.hexsha
+        except Exception:
+            base_sha = ""
 
         # Stage 2: Context (emits stage-transition internally)
         context = build_context(
@@ -217,6 +220,10 @@ def _stage_interaction_and_publication(
         )
         interaction_messages = result["messages"]
         pending_user_prompt = None
+
+        should_publish = bool(config.workspace.repo) and config.publication.strategy != "skip"
+        if not should_publish:
+            return result, None
 
         # Publication guardrails
         gateway.emit(StageTransitionData(from_stage="interaction", to_stage="publication"))

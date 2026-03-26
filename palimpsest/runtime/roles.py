@@ -24,6 +24,7 @@ class RoleDefinition:
     This replaces the legacy YAML configurations.
     """
     name: str
+    description: str
     # Either inline markdown text, or a relative path (e.g., "prompts/default.md")
     prompt: str
     # List of context sections mapped to @context_provider functions
@@ -43,6 +44,15 @@ class JobSpec:
     context_template: dict
     tools: list[str] = field(default_factory=list)
     source_role: str = ""  # informational only; not used at execution time
+
+
+@dataclass
+class TeamDefinition:
+    name: str
+    description: str
+    roles: list[str] = field(default_factory=list)
+    planner_role: str = "planner"
+    eval_role: str = "evaluator"
 
 
 class RoleManager:
@@ -105,3 +115,49 @@ class RoleManager:
                 return attr
 
         raise ValueError(f"No RoleDefinition instance found in {py_path}. Please export one.")
+
+
+class TeamManager:
+    """Loads team definitions from evo/teams and provides sane defaults."""
+
+    def __init__(self, evo_root: str | Path):
+        self._root = Path(evo_root)
+
+    def list_teams(self) -> list[str]:
+        teams_dir = self._root / "teams"
+        if not teams_dir.exists():
+            return []
+        return [p.stem for p in teams_dir.glob("*.py") if not p.name.startswith("_")]
+
+    def resolve(self, name: str) -> TeamDefinition:
+        team_name = (name or "default").strip() or "default"
+        py_path = self._root / "teams" / f"{team_name}.py"
+        if not py_path.exists():
+            if team_name == "default":
+                return TeamDefinition(
+                    name="default",
+                    description="Default planning and execution team",
+                    roles=["default"],
+                    planner_role="planner",
+                    eval_role="evaluator",
+                )
+            raise FileNotFoundError(f"Team definition not found: {team_name} (expected {py_path})")
+
+        module_name = f"_evo_teams_{team_name}"
+        spec = importlib.util.spec_from_file_location(module_name, py_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Could not load team module from {py_path}")
+
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except Exception as exc:
+            logger.error(f"Failed to execute team module {py_path}: {exc}")
+            raise RuntimeError(f"Error loading team '{team_name}': {exc}") from exc
+
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if isinstance(attr, TeamDefinition):
+                return attr
+
+        raise ValueError(f"No TeamDefinition instance found in {py_path}. Please export one.")

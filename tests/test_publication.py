@@ -33,6 +33,26 @@ def test_publication_skips_failed_job(tmp_path):
     assert git_ref is None
 
 
+def test_publication_skips_repoless_workspace(tmp_path):
+    config = PublicationConfig()
+    result = {"status": "success", "summary": "meta job"}
+    git_ref = publish_results("test-meta", result, str(tmp_path), config)
+    assert git_ref is None
+
+
+def test_publication_skips_when_strategy_is_skip(tmp_path):
+    repo = git.Repo.init(tmp_path)
+    (tmp_path / "init.txt").write_text("init")
+    repo.index.add(["init.txt"])
+    repo.index.commit("init")
+    repo.git.checkout("-b", "main")
+
+    config = PublicationConfig(strategy="skip")
+    result = {"status": "success", "summary": "eval"}
+    git_ref = publish_results("test-skip", result, str(tmp_path), config)
+    assert git_ref is None
+
+
 def test_publication_push_failure_propagates(tmp_path):
     """Push failure must propagate as an exception, not return None."""
     repo = git.Repo.init(tmp_path)

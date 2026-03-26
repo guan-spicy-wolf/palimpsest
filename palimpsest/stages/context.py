@@ -61,6 +61,8 @@ def build_context(
                     kwargs["job_config"] = job_config
                 if "eventstore" in sig.parameters:
                     kwargs["eventstore"] = job_config.eventstore
+                if "evo_root" in sig.parameters and evo_root is not None:
+                    kwargs["evo_root"] = str(evo_root)
 
                 content = provider_fn(**kwargs)
                 parts.append(str(content))

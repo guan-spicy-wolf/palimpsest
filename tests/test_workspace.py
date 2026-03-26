@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import git
 
 from palimpsest.config import WorkspaceConfig
@@ -37,8 +39,4 @@ def test_setup_workspace_configures_default_git_identity_for_empty_repo(tmp_path
         WorkspaceConfig(repo="", init_branch="main"),
         branch_prefix="palimpsest/job",
     )
-    repo = git.Repo(workspace)
-    reader = repo.config_reader(config_level="repository")
-
-    assert reader.get_value("user", "name") == "Test Agent"
-    assert reader.get_value("user", "email") == "agent@example.com"
+    assert not (Path(workspace) / ".git").exists()

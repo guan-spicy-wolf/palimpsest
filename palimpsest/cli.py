@@ -64,9 +64,9 @@ def container_entrypoint(verbose: bool):
 @click.option("--evo-path", default="evo", help="Path to evolvable repository")
 def list_roles_cmd(evo_path: str):
     """List available roles in the evolvable repository."""
-    from palimpsest.runtime import RoleResolver
+    from palimpsest.runtime import RoleManager
 
-    resolver = RoleResolver(evo_path)
+    resolver = RoleManager(evo_path)
     for name in resolver.list_roles():
         click.echo(name)
 

@@ -107,6 +107,7 @@ def test_cleanup_issue_calls_finalize_with_gateway(tmp_path):
 def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-1", task="x")
+    config.workspace.repo = "https://example.com/repo.git"
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
     interaction_results = [
         {"summary": "first", "messages": [{"role": "user", "content": "initial"}]},
@@ -132,6 +133,7 @@ def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
 def test_publication_guardrail_can_fail_without_retry(tmp_path):
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-1", task="x")
+    config.workspace.repo = "https://example.com/repo.git"
     config.publication.max_recovery_attempts = 0
     spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
 
@@ -224,3 +226,24 @@ def test_runner_emits_budget_exhausted_code_on_clean_partial_exit(tmp_path):
     completed = [event for event in emitter.events if isinstance(event, JobCompletedData)]
     assert completed
     assert completed[-1].code == "budget_exhausted"
+
+
+def test_runner_skips_publication_for_repoless_job(tmp_path):
+    emitter = RecordingEmitter()
+    config = JobConfig(job_id="job-1", task="x")
+    config.workspace.repo = ""
+    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+
+    patches = _base_patches(emitter, tmp_path)
+    patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
+        return_value={"status": "complete", "summary": "meta", "messages": []}
+    )
+    patches["palimpsest.runner.git.Repo"] = MagicMock(side_effect=Exception("no repo"))
+    patches["palimpsest.runner.publish_results"] = MagicMock(return_value="branch:sha")
+
+    with _apply_patches(patches)[0]:
+        _run_job_from_spec(config, spec, tmp_path)
+
+    patches["palimpsest.runner.publish_results"].assert_not_called()
+    completed = [event for event in emitter.events if isinstance(event, JobCompletedData)]
+    assert completed[-1].git_ref is None

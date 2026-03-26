@@ -1,4 +1,4 @@
-from palimpsest.runtime.roles import RoleManager, JobSpec, RoleDefinition
+from palimpsest.runtime.roles import JobSpec, RoleDefinition, RoleManager, TeamDefinition, TeamManager
 from palimpsest.runtime.event_gateway import EventGateway
 from palimpsest.runtime.llm import LLMGateway, UnifiedLLMGateway, LLMResponse, ToolCall
 from palimpsest.runtime.mock_llm import MockLLMGateway, LLMResponse as MockLLMResponse, ToolCall as MockToolCall
@@ -8,6 +8,8 @@ __all__ = [
     "RoleManager",
     "JobSpec",
     "RoleDefinition",
+    "TeamDefinition",
+    "TeamManager",
     "EventGateway",
     "LLMGateway",
     "UnifiedLLMGateway",

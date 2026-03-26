@@ -56,8 +56,15 @@ def publish_results(
     if result.get("status") == "failed":
         logger.warning("Skipping publication for failed job")
         return None
+    if config.strategy == "skip":
+        logger.info("Skipping publication because publication.strategy=skip")
+        return None
 
-    repo = git.Repo(workspace_path)
+    try:
+        repo = git.Repo(workspace_path)
+    except git.InvalidGitRepositoryError:
+        logger.info("Skipping publication for repoless workspace")
+        return None
     repo.git.add("-A")
 
     status = result.get("status", "completed")
