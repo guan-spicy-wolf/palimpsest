@@ -63,7 +63,7 @@ def run_job(config: JobConfig) -> None:
     evo_path = Path.cwd() / _EVO_DIR
 
     resolver = RoleManager(evo_path)
-    spec = resolver.resolve(config.role)
+    spec = resolver.resolve(config.role, **dict(config.role_params or {}))
 
     logger.info(
         f"Resolved role '{config.role}' -> JobSpec "
@@ -100,6 +100,8 @@ def _run_job_from_spec(
             job_id,
             config.workspace,
             config.publication.branch_prefix,
+            task_id=config.task_id or job_id,
+            goal=config.task,
             gateway=gateway,
             evo_sha=evo_sha,
         )
@@ -256,6 +258,8 @@ def _stage_interaction_and_publication(
 
         git_ref = publish_results(
             job_id,
+            config.task_id or job_id,
+            config.task,
             result,
             workspace,
             config.publication,

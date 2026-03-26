@@ -247,3 +247,25 @@ def test_runner_skips_publication_for_repoless_job(tmp_path):
     patches["palimpsest.runner.publish_results"].assert_not_called()
     completed = [event for event in emitter.events if isinstance(event, JobCompletedData)]
     assert completed[-1].git_ref is None
+
+
+def test_runner_marks_job_failed_when_publication_fails_after_budget_exhaustion(tmp_path):
+    emitter = RecordingEmitter()
+    config = JobConfig(job_id="job-1", task="x")
+    config.workspace.repo = "https://example.com/repo.git"
+    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+
+    patches = _base_patches(emitter, tmp_path)
+    patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
+        return_value={"status": "partial", "code": "budget_exhausted", "summary": "wip", "messages": []}
+    )
+    patches["palimpsest.runner.git.Repo"] = MagicMock()
+    patches["palimpsest.runner.find_publication_issues"] = MagicMock(return_value=[])
+    patches["palimpsest.runner.publish_results"] = MagicMock(side_effect=RuntimeError("push failed"))
+
+    with _apply_patches(patches)[0]:
+        with pytest.raises(Exception):
+            _run_job_from_spec(config, spec, tmp_path)
+
+    assert any(isinstance(event, JobFailedData) and "push failed" in event.error for event in emitter.events)
+    assert not any(isinstance(event, JobCompletedData) for event in emitter.events)

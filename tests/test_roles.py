@@ -66,7 +66,7 @@ def test_eval_context_includes_child_task_state_summaries():
             pass
 
         def fetch_all(self, *, type_=None, source=None, limit=100):
-            if type_ == "task.completed":
+            if type_ == "supervisor.task.completed":
                 return [
                     SimpleNamespace(
                         data={"task_id": "child-1", "summary": "done"},

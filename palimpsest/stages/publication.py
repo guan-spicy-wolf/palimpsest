@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 
 import git
 from loguru import logger
@@ -42,6 +43,8 @@ def _push_auth_environment(git_token_env: str) -> dict[str, str]:
 
 def publish_results(
     job_id: str,
+    task_id: str,
+    goal: str,
     result: dict,
     workspace_path: str,
     config: PublicationConfig,
@@ -67,14 +70,15 @@ def publish_results(
         return None
     repo.git.add("-A")
 
-    status = result.get("status", "completed")
-    summary = result.get("summary", "")[:500]
-    commit_prefix = "feat"
+    summary = str(result.get("summary", "") or "").strip()[:500]
+    code = str(result.get("code", "") or "")
+    subject = _commit_subject(summary, goal, code=code)
+    body = _commit_body(job_id=job_id, task_id=task_id, summary=summary, code=code)
     if repo.is_dirty(index=True) or repo.untracked_files:
-        commit = repo.index.commit(f"{commit_prefix}: palimpsest job {job_id}\n\n{summary}")
+        commit = repo.index.commit(f"{subject}\n\n{body}")
         logger.info(f"Committed {commit.hexsha[:8]}")
     else:
-        repo.git.commit("--allow-empty", "-m", f"chore: palimpsest job {job_id} (no changes)")
+        repo.git.commit("--allow-empty", "-m", f"{subject}\n\n{body}\n\nNo workspace changes.")
         commit = repo.head.commit
         logger.info(f"Empty commit {commit.hexsha[:8]}")
 
@@ -94,6 +98,28 @@ def publish_results(
         else:
             repo.git.push("--porcelain", "--", repo.remotes[0].name, branch_name)
     else:
-        logger.warning("No remote configured, skipping push")
+        raise RuntimeError("Publication strategy requires a configured remote, but none was found")
 
     return git_ref
+
+
+def _commit_subject(summary: str, goal: str, *, code: str = "") -> str:
+    first_line = next((line.strip() for line in summary.splitlines() if line.strip()), "")
+    text = first_line or goal.strip() or "completed job"
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text[:72]
+    if code == "budget_exhausted":
+        return f"agent.job.completed: {text}"
+    return f"agent.job.completed: {text}"
+
+
+def _commit_body(*, job_id: str, task_id: str, summary: str, code: str = "") -> str:
+    lines = [
+        f"job_id: {job_id}",
+        f"task_id: {task_id}",
+    ]
+    if code:
+        lines.append(f"code: {code}")
+    if summary:
+        lines.extend(["", summary])
+    return "\n".join(lines)

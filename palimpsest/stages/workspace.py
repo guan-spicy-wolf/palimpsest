@@ -16,10 +16,25 @@ _DEFAULT_GIT_USER_NAME = "Palimpsest Agent"
 _DEFAULT_GIT_USER_EMAIL = "palimpsest@local.invalid"
 
 
+def _slugify_goal(goal: str, *, max_length: int = 48) -> str:
+    text = "".join(ch.lower() if ch.isalnum() else "-" for ch in (goal or "").strip())
+    text = "-".join(part for part in text.split("-") if part)
+    return (text[:max_length].rstrip("-") or "task")
+
+
+def branch_name_for_task(branch_prefix: str, task_id: str, goal: str) -> str:
+    task_token = (task_id or "task")[:12]
+    slug = _slugify_goal(goal)
+    return f"{branch_prefix}/{task_token}/{slug}"
+
+
 def setup_workspace(
     job_id: str,
     config: WorkspaceConfig,
     branch_prefix: str = "palimpsest/job",
+    *,
+    task_id: str = "",
+    goal: str = "",
     gateway: EventGateway | None = None,
     evo_sha: str = "",
 ) -> str:
@@ -67,7 +82,11 @@ def setup_workspace(
         _ensure_repo_identity(repo)
 
     if repo is not None and config.new_branch:
-        job_branch = f"{branch_prefix}/{job_id}"
+        job_branch = branch_name_for_task(
+            branch_prefix,
+            task_id or job_id,
+            goal,
+        )
         repo.git.checkout("-b", job_branch)
         logger.info(f"Created branch: {job_branch}")
     elif repo is not None:

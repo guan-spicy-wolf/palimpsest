@@ -22,12 +22,15 @@ def test_setup_workspace_configures_git_identity_for_cloned_repo(tmp_path, monke
         "job-1",
         WorkspaceConfig(repo=str(source), init_branch="master", depth=1),
         branch_prefix="palimpsest/job",
+        task_id="task-abc123",
+        goal="Define Shared Graph Contracts",
     )
     cloned = git.Repo(workspace)
 
     reader = cloned.config_reader(config_level="repository")
     assert reader.get_value("user", "name") == "Test Agent"
     assert reader.get_value("user", "email") == "agent@example.com"
+    assert cloned.active_branch.name == "palimpsest/job/task-abc123/define-shared-graph-contracts"
 
 
 def test_setup_workspace_configures_default_git_identity_for_empty_repo(tmp_path, monkeypatch):

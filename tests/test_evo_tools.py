@@ -115,3 +115,33 @@ class TestSpawn:
         assert child.prompt == "Review docs"
         assert child.job_spec.role == "default"
         assert child.job_spec.init_branch == "docs-branch"
+
+    def test_spawn_accepts_goal_budget_and_role_fn(self, tmp_path):
+        repo = git.Repo.init(tmp_path)
+        with repo.config_writer() as writer:
+            writer.set_value("user", "name", "Test Agent")
+            writer.set_value("user", "email", "agent@example.com")
+        (tmp_path / "README.md").write_text("hello\n")
+        repo.index.add(["README.md"])
+        repo.index.commit("init")
+        repo.git.checkout("-b", "main")
+
+        emitted = []
+
+        class FakeGateway:
+            def emit(self, event):
+                emitted.append(event)
+
+        result = spawn(
+            tasks=[{"goal": "Implement OAuth2 login endpoint", "role_fn": "implementer", "budget": 0.6}],
+            workspace=str(tmp_path),
+            gateway=FakeGateway(),
+            evo_root=str(EVO_ROOT),
+        )
+
+        assert result.success is True
+        child = emitted[0].tasks[0]
+        assert child.prompt == "Implement OAuth2 login endpoint"
+        assert child.job_spec.role == "implementer"
+        assert child.job_spec.llm["max_total_cost"] == 0.6
+        assert child.job_spec.llm["max_iterations"] == 0

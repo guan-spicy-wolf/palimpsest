@@ -153,14 +153,14 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
     if not isinstance(task, dict):
         raise ValueError("Each spawn task must be an object")
 
-    prompt = str(task.get("prompt") or task.get("task") or "").strip()
+    prompt = str(task.get("prompt") or task.get("goal") or task.get("task") or "").strip()
     if not prompt:
-        raise ValueError("Each spawn task requires a non-empty prompt")
+        raise ValueError("Each spawn task requires a non-empty goal/prompt")
 
     defaults = _infer_spawn_job_defaults(workspace, evo_sha)
     job_spec = dict(task.get("job_spec") or {})
 
-    role = task.get("role")
+    role = task.get("role") or task.get("role_fn")
     if not role and task.get("role_file"):
         role_file = str(task["role_file"])
         role = role_file.removeprefix("roles/").removesuffix(".py")
@@ -182,6 +182,13 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
         if isinstance(task.get(key), dict) and not job_spec.get(key):
             job_spec[key] = dict(task[key])
 
+    budget = task.get("budget")
+    if isinstance(budget, (int, float)) and budget > 0:
+        llm_cfg = dict(job_spec.get("llm") or {})
+        llm_cfg.setdefault("max_total_cost", float(budget))
+        llm_cfg.setdefault("max_iterations", 0)
+        job_spec["llm"] = llm_cfg
+
     normalized_job_spec = {
         "repo": job_spec.get("repo") or defaults["repo"],
         "init_branch": job_spec.get("init_branch") or defaults["init_branch"],
@@ -194,7 +201,16 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
 
     eval_spec = task.get("eval_spec")
     normalized_eval_spec = EvalSpec.model_validate(eval_spec) if isinstance(eval_spec, dict) else None
-    return SpawnTaskData(prompt=prompt, job_spec=normalized_job_spec, eval_spec=normalized_eval_spec)
+    return SpawnTaskData(
+        prompt=prompt,
+        goal=prompt,
+        role=str(role or ""),
+        budget=float(budget) if isinstance(budget, (int, float)) else 0.0,
+        sha=normalized_job_spec["evo_sha"] or None,
+        params={k: v for k, v in task.items() if k not in {"prompt", "goal", "task", "role", "role_fn", "budget", "eval_spec", "job_spec", "repo", "init_branch", "branch", "evo_sha", "role_sha", "llm", "workspace", "publication"}},
+        job_spec=normalized_job_spec,
+        eval_spec=normalized_eval_spec,
+    )
 
 
 @tool
@@ -209,6 +225,8 @@ def spawn(
     """Request the Supervisor to spawn child tasks.
     
     tasks: List of child tasks to spawn.
+      Minimal planner form:
+      {"role": "...", "goal": "...", "budget": 0.60, "eval_spec": {...}}
       Optional per-task `eval_spec`:
       {"role": "...", "deliverables": ["..."], "criteria": ["..."], "metadata": {...}}
     wait_for: Join condition ('all_complete' or 'any_success').
