@@ -39,8 +39,16 @@ tools:
 
 publication:
   strategy: "branch"
+  mode: "branch_only"  # Options: branch_only, pr_draft, approval_required
   branch_prefix: "palimpsest/job"
+  result_branch: ""
+  create_pr: true
+  pr_base: "main"
   max_recovery_attempts: 1
+  # Trust model:
+  # - branch_only: Automated trust, no human review required
+  # - pr_draft: Review suggested, creates draft PR for human review
+  # - approval_required: Human approval required, blocks until approved
 
 eventstore:
   url: ""

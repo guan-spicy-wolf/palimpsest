@@ -15,6 +15,7 @@ events (completed / failed) and orchestration-level events.
 
 from __future__ import annotations
 
+import json
 import signal
 import traceback
 from pathlib import Path
@@ -118,17 +119,23 @@ def _run_job_from_spec(
         # Stage 3+4: Interaction and publication
         tools = _setup_tools(config, spec, evo_path, gateway)
         llm = _setup_llm(config, gateway)
-        result, git_ref = _stage_interaction_and_publication(
+        result, git_ref, artifact_info = _stage_interaction_and_publication(
             job_id, context, workspace, config, spec, gateway, tools, llm,
             base_sha=base_sha,
         )
 
+        # Emit structured completion event
         gateway.emit(
             JobCompletedData(
                 git_ref=git_ref,
                 summary=result.get("summary", ""),
                 status=str(result.get("status", "complete") or "complete"),
                 code=str(result.get("code", "") or ""),
+                artifact_path=artifact_info.get("artifact_path"),
+                publication_mode=artifact_info.get("publication_mode", "branch_only"),
+                trust_level=artifact_info.get("trust_level", "automated"),
+                requires_review=artifact_info.get("requires_review", False),
+                files_changed=artifact_info.get("files_changed", []),
             )
         )
         logger.info(f"Job {job_id} completed")
@@ -187,6 +194,17 @@ def _setup_llm(config: JobConfig, gateway: EventGateway) -> UnifiedLLMGateway:
     return UnifiedLLMGateway(config.llm, gateway)
 
 
+def _determine_trust_level(mode: str) -> str:
+    """Determine the trust level based on publication mode."""
+    if mode == "approval_required":
+        return "human_required"
+    elif mode == "pr_draft":
+        return "review_suggested"
+    elif mode == "branch_only":
+        return "automated"
+    return "unknown"
+
+
 def _stage_interaction_and_publication(
     job_id: str,
     context: dict,
@@ -198,8 +216,8 @@ def _stage_interaction_and_publication(
     llm: UnifiedLLMGateway,
     *,
     base_sha: str = "",
-) -> tuple[dict, str]:
-    """Stage 3+4: interaction loop with publication recovery. Returns (result, git_ref)."""
+) -> tuple[dict, str | None, dict]:
+    """Stage 3+4: interaction loop with publication recovery. Returns (result, git_ref, artifact_info)."""
     from palimpsest.events import StageTransitionData
     gateway.emit(StageTransitionData(from_stage="context", to_stage="interaction"))
 
@@ -223,7 +241,9 @@ def _stage_interaction_and_publication(
 
         should_publish = bool(config.workspace.repo) and config.publication.strategy != "skip"
         if not should_publish:
-            return result, None
+            # Still create artifact for non-published results
+            artifact_info = _create_artifact_info(None, result, config.publication)
+            return result, None, artifact_info
 
         # Publication guardrails
         gateway.emit(StageTransitionData(from_stage="interaction", to_stage="publication"))
@@ -261,7 +281,52 @@ def _stage_interaction_and_publication(
             config.publication,
             git_token_env=config.workspace.git_token_env,
         )
-        return result, git_ref
+        
+        # Read artifact info from the completion artifact
+        artifact_info = _read_artifact_info(workspace, git_ref, result, config.publication)
+        return result, git_ref, artifact_info
+
+
+def _create_artifact_info(
+    artifact_path: str | None,
+    result: dict,
+    publication_config,
+) -> dict:
+    """Create artifact info dict for the completion event."""
+    mode = getattr(publication_config, "mode", "branch_only")
+    return {
+        "artifact_path": artifact_path,
+        "publication_mode": mode,
+        "trust_level": _determine_trust_level(mode),
+        "requires_review": mode in ("pr_draft", "approval_required"),
+        "files_changed": [],
+    }
+
+
+def _read_artifact_info(
+    workspace: str,
+    git_ref: str | None,
+    result: dict,
+    publication_config,
+) -> dict:
+    """Read artifact info from the completion artifact file."""
+    mode = getattr(publication_config, "mode", "branch_only")
+    artifact_path = Path(workspace) / ".palimpsest" / "completion.json"
+    
+    artifact_info = _create_artifact_info(
+        str(artifact_path) if artifact_path.exists() else None,
+        result,
+        publication_config,
+    )
+    
+    if artifact_path.exists():
+        try:
+            artifact_data = json.loads(artifact_path.read_text())
+            artifact_info["files_changed"] = artifact_data.get("artifacts", {}).get("files_changed", [])
+        except Exception as e:
+            logger.debug(f"Could not read completion artifact: {e}")
+    
+    return artifact_info
 
 
 # ---------------------------------------------------------------------------
