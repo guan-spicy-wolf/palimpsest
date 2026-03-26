@@ -24,6 +24,7 @@ from yoitsu_contracts.events import (
     TaskCreatedData,
     TaskCompletedData,
     TaskFailedData,
+    TaskPartialData,
     TaskCancelledData,
 )
 
@@ -53,5 +54,6 @@ __all__ = [
     "TaskCreatedData",
     "TaskCompletedData",
     "TaskFailedData",
+    "TaskPartialData",
     "TaskCancelledData",
 ]

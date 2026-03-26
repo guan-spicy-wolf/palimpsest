@@ -203,3 +203,24 @@ def test_job_timeout_emits_failed_with_timeout_code(tmp_path):
         isinstance(e, JobFailedData) and e.code == "timeout"
         for e in emitter.events
     )
+
+
+def test_runner_emits_budget_exhausted_code_on_clean_partial_exit(tmp_path):
+    emitter = RecordingEmitter()
+    config = JobConfig(job_id="job-1", task="x")
+    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+
+    patches = _base_patches(emitter, tmp_path)
+    patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
+        return_value={"status": "partial", "code": "budget_exhausted", "summary": "wip", "messages": []}
+    )
+    patches["palimpsest.runner.git.Repo"] = MagicMock()
+    patches["palimpsest.runner.find_publication_issues"] = MagicMock(return_value=[])
+    patches["palimpsest.runner.publish_results"] = MagicMock(return_value="branch:sha")
+
+    with _apply_patches(patches)[0]:
+        _run_job_from_spec(config, spec, tmp_path)
+
+    completed = [event for event in emitter.events if isinstance(event, JobCompletedData)]
+    assert completed
+    assert completed[-1].code == "budget_exhausted"

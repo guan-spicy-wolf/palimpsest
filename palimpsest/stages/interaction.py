@@ -60,7 +60,7 @@ def run_interaction_loop(
     messages: list[dict] | None = None,
     user_prompt: str | None = None,
 ) -> dict:
-    """Core agent loop. Returns {"summary": str, "status": str, "messages": list}.
+    """Core agent loop. Returns {"summary": str, "status": str, "code": str, "messages": list}.
 
     Completion is determined by the runtime:
       - Explicit task_complete tool call → interaction loop ends
@@ -116,6 +116,7 @@ def run_interaction_loop(
             return {
                 "summary": summary[:500],
                 "status": "incomplete",
+                "code": "",
                 "messages": messages,
             }
 
@@ -136,12 +137,14 @@ def run_interaction_loop(
                 return {
                     "summary": (summary or "")[:500],
                     "status": status,
+                    "code": "",
                     "messages": messages,
                 }
 
     logger.warning(f"Stopped after {max_iterations} iterations")
     return {
         "summary": f"Stopped after {max_iterations} iterations",
-        "status": "max_iterations",
+        "status": "partial",
+        "code": "budget_exhausted",
         "messages": messages,
     }

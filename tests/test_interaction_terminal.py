@@ -115,3 +115,12 @@ def test_non_task_complete_terminal_is_ignored():
     context = {"system": "test agent", "task": "do nothing"}
     result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
     assert "summary" in result
+
+
+def test_interaction_loop_budget_exhaustion_returns_partial_code():
+    llm = FakeLLM([(None, [("bash", {"command": "echo hi"})])])
+    tools = FakeTools()
+    context = {"system": "test agent", "task": "keep going"}
+    result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=1)
+    assert result["status"] == "partial"
+    assert result["code"] == "budget_exhausted"
