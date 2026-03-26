@@ -47,6 +47,12 @@ class LLMGateway(ABC):
     def call(self, messages: list[dict], tools_schema: list[dict]) -> LLMResponse:
         pass
 
+    def budget_exhausted(self) -> str | None:
+        return None
+
+    def budget_remaining(self) -> dict[str, dict[str, int | float | bool | None]]:
+        return {}
+
 
 class UnifiedLLMGateway(LLMGateway):
     """Unified Native LLM Gateway routing between OpenAI and Anthropic SDKs.
@@ -54,11 +60,28 @@ class UnifiedLLMGateway(LLMGateway):
     Falls back to MockLLMGateway if no API key is available.
     """
 
+    _MODEL_PRICING_PER_MILLION: tuple[tuple[str, tuple[float, float]], ...] = (
+        ("claude-sonnet-4-6", (3.0, 15.0)),
+        ("claude-3-7-sonnet", (3.0, 15.0)),
+        ("claude-3-5-sonnet", (3.0, 15.0)),
+        ("gpt-5-mini", (0.25, 2.0)),
+        ("gpt-5", (1.25, 10.0)),
+        ("gpt-4.1-mini", (0.40, 1.60)),
+        ("gpt-4.1", (2.0, 8.0)),
+        ("gpt-4o-mini", (0.15, 0.60)),
+        ("gpt-4o", (2.5, 10.0)),
+    )
+
     def __init__(self, config: LLMConfig, gateway: EventGateway):
         self._config = config
         self._gateway = gateway
-        self._iteration = 0
         self._api_key = os.environ.get(config.api_key_env, "")
+        self.total_iterations = 0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cost = 0.0
+        self._cost_tracking_warned = False
+        self._pricing = self._lookup_model_pricing(config.model)
         
         # Check if we should use mock mode
         if not self._api_key and not os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
@@ -70,40 +93,42 @@ class UnifiedLLMGateway(LLMGateway):
     def _create_mock_gateway(self):
         """Create a mock LLM gateway for testing."""
         from palimpsest.runtime.mock_llm import MockLLMGateway
-        return MockLLMGateway(self._config, self._gateway)
+        return MockLLMGateway(self._config)
 
     def call(self, messages: list[dict], tools_schema: list[dict]) -> LLMResponse:
-        # Use mock if no API key available
-        if self._mock_gateway:
-            mock_response = self._mock_gateway.call(messages, tools_schema)
-            # Convert mock response to standard LLMResponse
-            return LLMResponse(
-                text=mock_response.text,
-                tool_calls=[ToolCall(id=tc.id, name=tc.name, arguments=tc.arguments) for tc in mock_response.tool_calls],
-                finish_reason=mock_response.finish_reason,
-                input_tokens=mock_response.input_tokens,
-                output_tokens=mock_response.output_tokens,
-                raw_message=mock_response.raw_message,
-            )
-        self._iteration += 1
+        next_iteration = self.total_iterations + 1
 
         self._gateway.emit(
             LLMRequestData(
                 model=self._config.model,
                 messages_count=len(messages),
                 tools_count=len(tools_schema),
-                iteration=self._iteration,
+                iteration=next_iteration,
             )
         )
 
         start = time.monotonic_ns()
 
-        if self._config.model.startswith("claude-"):
+        if self._mock_gateway:
+            mock_response = self._mock_gateway.call(messages, tools_schema)
+            response = LLMResponse(
+                text=mock_response.text,
+                tool_calls=[
+                    ToolCall(id=tc.id, name=tc.name, arguments=tc.arguments)
+                    for tc in mock_response.tool_calls
+                ],
+                finish_reason=mock_response.finish_reason,
+                input_tokens=mock_response.input_tokens,
+                output_tokens=mock_response.output_tokens,
+                raw_message=mock_response.raw_message,
+            )
+        elif self._config.model.startswith("claude-"):
             response = self._call_anthropic(messages, tools_schema)
         else:
             response = self._call_openai(messages, tools_schema)
 
         duration_ms = (time.monotonic_ns() - start) // 1_000_000
+        self._record_usage(response)
 
         self._gateway.emit(
             LLMResponseData(
@@ -116,6 +141,92 @@ class UnifiedLLMGateway(LLMGateway):
         )
 
         return response
+
+    def budget_exhausted(self) -> str | None:
+        if self._config.max_iterations > 0 and self.total_iterations >= self._config.max_iterations:
+            return "max_iterations"
+        if (
+            self._config.max_total_input_tokens > 0
+            and self.total_input_tokens >= self._config.max_total_input_tokens
+        ):
+            return "input_tokens"
+        if (
+            self._config.max_total_output_tokens > 0
+            and self.total_output_tokens >= self._config.max_total_output_tokens
+        ):
+            return "output_tokens"
+        if self._cost_budget_enabled() and self.total_cost >= self._config.max_total_cost:
+            return "cost"
+        return None
+
+    def budget_remaining(self) -> dict[str, dict[str, int | float | bool | None]]:
+        return {
+            "iterations": self._budget_state(self.total_iterations, self._config.max_iterations),
+            "input_tokens": self._budget_state(
+                self.total_input_tokens, self._config.max_total_input_tokens
+            ),
+            "output_tokens": self._budget_state(
+                self.total_output_tokens, self._config.max_total_output_tokens
+            ),
+            "cost": self._budget_state(
+                self.total_cost,
+                self._config.max_total_cost,
+                enabled=self._cost_budget_enabled(),
+            ),
+        }
+
+    def _record_usage(self, response: LLMResponse) -> None:
+        self.total_iterations += 1
+        self.total_input_tokens += max(0, response.input_tokens)
+        self.total_output_tokens += max(0, response.output_tokens)
+        cost_estimate = self._estimate_cost(response.input_tokens, response.output_tokens)
+        if cost_estimate is not None:
+            self.total_cost += cost_estimate
+
+    @classmethod
+    def _lookup_model_pricing(cls, model: str) -> tuple[float, float] | None:
+        normalized = model.strip().lower()
+        normalized = normalized.split("/", 1)[-1]
+        for prefix, pricing in cls._MODEL_PRICING_PER_MILLION:
+            if normalized.startswith(prefix):
+                return pricing
+        return None
+
+    def _estimate_cost(self, input_tokens: int, output_tokens: int) -> float | None:
+        if self._pricing is None:
+            if self._config.max_total_cost > 0 and not self._cost_tracking_warned:
+                logger.warning(
+                    f"Cost budget configured for model {self._config.model!r}, "
+                    "but pricing is unknown; cost enforcement is disabled"
+                )
+                self._cost_tracking_warned = True
+            return None
+        input_rate, output_rate = self._pricing
+        return (
+            (max(0, input_tokens) / 1_000_000.0) * input_rate
+            + (max(0, output_tokens) / 1_000_000.0) * output_rate
+        )
+
+    def _cost_budget_enabled(self) -> bool:
+        return self._config.max_total_cost > 0 and self._pricing is not None
+
+    @staticmethod
+    def _budget_state(
+        used: int | float,
+        limit: int | float,
+        *,
+        enabled: bool | None = None,
+    ) -> dict[str, int | float | bool | None]:
+        limited = enabled if enabled is not None else limit > 0
+        remaining: int | float | None = None
+        if limited:
+            remaining = max(0, limit - used)
+        return {
+            "used": used,
+            "limit": limit if limited else None,
+            "remaining": remaining,
+            "limited": limited,
+        }
 
     def _call_openai(self, messages: list[dict], tools_schema: list[dict]) -> LLMResponse:
         try:

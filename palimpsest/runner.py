@@ -212,7 +212,6 @@ def _stage_interaction_and_publication(
             workspace,
             llm,
             tools,
-            config.llm.max_iterations,
             messages=interaction_messages,
             user_prompt=pending_user_prompt,
         )
@@ -243,7 +242,8 @@ def _stage_interaction_and_publication(
             pending_user_prompt = (
                 "Publication was blocked by runtime guardrails.\n"
                 "Issues:\n- " + "\n- ".join(issues) + "\n"
-                "Please fix the workspace state, then explicitly call task_complete again."
+                "Please fix the workspace state, continue using tools if needed, "
+                "and stop calling tools when the job is actually done."
             )
             continue
 

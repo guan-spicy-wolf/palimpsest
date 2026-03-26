@@ -27,7 +27,6 @@ from palimpsest.runtime.event_gateway import EventGateway
 class ToolResult:
     success: bool
     output: str
-    terminal: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -124,17 +123,6 @@ def bash(command: str, workspace: str, config: ToolsConfig | None = None) -> Too
 
     output = (result.stdout or "") + (result.stderr or "")
     return ToolResult(success=result.returncode == 0, output=output[:output_limit])
-
-
-@tool
-def task_complete(summary: str, status: str = "complete") -> ToolResult:
-    """Signal the current task state and end this job run.
-
-    Args:
-        summary: Brief summary of what was accomplished.
-        status: One of complete, failed, in_progress, blocked, needs_review.
-    """
-    return ToolResult(success=True, output=f"[{status}] {summary}", terminal=True)
 
 
 def _infer_spawn_job_defaults(workspace: str, evo_sha: str) -> dict[str, Any]:
@@ -360,9 +348,6 @@ class UnifiedToolGateway:
             self._functions["bash"] = bash_with_config
         if "spawn" not in disabled:
             self._functions["spawn"] = spawn
-        # task_complete is always available — it's a runtime control signal
-        self._functions["task_complete"] = task_complete
-
         # Load evo tools
         evo_funcs = resolve_tool_functions(evo_root, requested_evo_tools)
         

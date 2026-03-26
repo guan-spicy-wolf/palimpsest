@@ -29,12 +29,13 @@ Evo providers are loaded with isolated `importlib` scopes. They do not leak into
 
 Palimpsest does not infer or broadcast task state. It only manages execution of a single job:
 
-- `task_complete` tool ends the interaction loop (pure flow control)
+- the interaction loop ends when the agent naturally stops calling tools
+- hard budget exhaustion exits through `job.completed(code="budget_exhausted")`
 - publication commits changes and emits `job.completed`
 
 If the runtime itself fails, it emits `job.failed`.
 
-Trenni observes these job events and structurally derives whether the parent task has reached a terminal state (`task.completed`, `task.failed`, `task.cancelled`).
+Trenni observes these job events and structurally derives whether the parent task has reached a terminal state (`task.completed`, `task.failed`, `task.partial`, `task.cancelled`).
 
 ### 4. Publication Guardrails Re-enter The Loop
 

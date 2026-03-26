@@ -13,6 +13,9 @@ llm:
   api_base: "https://coding.dashscope.aliyuncs.com/v1"
   api_key_env: "OPENAI_API_KEY"
   max_iterations: 20
+  max_total_input_tokens: 0   # 0 = unlimited
+  max_total_output_tokens: 0  # 0 = unlimited
+  max_total_cost: 0.0         # USD, 0 = unlimited
   temperature: 1.0
   max_tokens: 4096
   # top_p: 1.0

@@ -17,37 +17,104 @@ from palimpsest.runtime.tools import UnifiedToolGateway
 class LoopWarning:
     """A one-shot warning injected into the agent conversation when triggered.
 
-    Add new warning types (context budget, token budget, etc.) by creating
-    additional instances and including them in _build_loop_warnings().
+    Warnings now operate on the full budget snapshot exposed by the LLM
+    gateway, so they can react to iterations, token budgets, or cost.
     """
 
-    trigger: Callable[[int], bool]   # receives remaining iteration count
-    message: Callable[[int], str]    # receives remaining iteration count
+    trigger: Callable[[dict], bool]
+    message: Callable[[dict], str]
     _fired: bool = field(default=False, init=False, repr=False)
 
-    def check(self, remaining: int) -> str | None:
-        if not self._fired and self.trigger(remaining):
+    def check(self, budget: dict) -> str | None:
+        if not self._fired and self.trigger(budget):
             self._fired = True
-            return self.message(remaining)
+            return self.message(budget)
         return None
 
 
-def _build_loop_warnings(max_iterations: int) -> list[LoopWarning]:
-    """Construct the active warning set for an interaction loop.
+def _dimension(budget: dict, name: str) -> dict:
+    return budget.get(name, {})
 
-    To add a new warning type, append another LoopWarning here.
-    """
-    warn_at = max(1, min(5, max_iterations // 5))
+
+def _limited_remaining(budget: dict, name: str) -> tuple[int | float | None, int | float | None]:
+    dimension = _dimension(budget, name)
+    if not dimension.get("limited"):
+        return None, None
+    return dimension.get("remaining"), dimension.get("limit")
+
+
+def _near_fractional_limit(
+    budget: dict,
+    name: str,
+    *,
+    fraction: float = 0.2,
+) -> bool:
+    remaining, limit = _limited_remaining(budget, name)
+    if remaining is None or limit in (None, 0):
+        return False
+    return remaining <= (limit * fraction)
+
+
+def _build_loop_warnings() -> list[LoopWarning]:
     return [
         LoopWarning(
-            trigger=lambda r, n=warn_at: r <= n,
-            message=lambda r: (
-                f"[Runtime] 你还剩 {r} 次迭代机会。"
-                "如果你认为该 Job 的工作已告一段落，请尽快调用 task_complete 进行收尾，"
-                "并提供 summary 说明已完成和未完成的部分。"
+            trigger=lambda budget: (
+                (remaining := _limited_remaining(budget, "iterations")[0]) is not None
+                and remaining <= max(1, min(5, int(_limited_remaining(budget, "iterations")[1] or 0) // 5))
+            ),
+            message=lambda budget: (
+                f"[Runtime] 你还剩 {_dimension(budget, 'iterations').get('remaining')} 次 LLM 调用预算。"
+                "如果还需要继续工作，就继续调用工具；如果工作已经完成，请停止调用工具并自然收尾。"
+            ),
+        ),
+        LoopWarning(
+            trigger=lambda budget: _near_fractional_limit(budget, "input_tokens"),
+            message=lambda budget: (
+                f"[Runtime] 你的累计输入 token 预算只剩 {_dimension(budget, 'input_tokens').get('remaining')}。"
+                "请优先收敛上下文，避免继续展开无关操作。"
+            ),
+        ),
+        LoopWarning(
+            trigger=lambda budget: _near_fractional_limit(budget, "output_tokens"),
+            message=lambda budget: (
+                f"[Runtime] 你的累计输出 token 预算只剩 {_dimension(budget, 'output_tokens').get('remaining')}。"
+                "请减少冗长说明，优先完成剩余关键操作。"
+            ),
+        ),
+        LoopWarning(
+            trigger=lambda budget: _near_fractional_limit(budget, "cost"),
+            message=lambda budget: (
+                f"[Runtime] 你的成本预算只剩 ${(_dimension(budget, 'cost').get('remaining') or 0):.4f}。"
+                "请快速收尾，避免继续产生非必要调用。"
             ),
         ),
     ]
+
+
+def _budget_exhausted_summary(reason: str, budget: dict, candidate_summary: str | None) -> str:
+    if candidate_summary:
+        return candidate_summary
+
+    reason_messages = {
+        "max_iterations": "LLM call budget exhausted before the next interaction step.",
+        "input_tokens": "Input token budget exhausted before the next interaction step.",
+        "output_tokens": "Output token budget exhausted before the next interaction step.",
+        "cost": "Cost budget exhausted before the next interaction step.",
+    }
+    detail = _dimension(
+        budget,
+        {
+            "max_iterations": "iterations",
+            "input_tokens": "input_tokens",
+            "output_tokens": "output_tokens",
+            "cost": "cost",
+        }.get(reason, ""),
+    )
+    used = detail.get("used")
+    limit = detail.get("limit")
+    if limit is not None:
+        return f"{reason_messages.get(reason, 'Budget exhausted.')} Used {used}/{limit}."
+    return reason_messages.get(reason, "Budget exhausted.")
 
 
 def run_interaction_loop(
@@ -56,16 +123,14 @@ def run_interaction_loop(
     workspace_path: str,
     llm: LLMGateway,
     tools: UnifiedToolGateway,
-    max_iterations: int,
     messages: list[dict] | None = None,
     user_prompt: str | None = None,
 ) -> dict:
     """Core agent loop. Returns {"summary": str, "status": str, "code": str, "messages": list}.
 
     Completion is determined by the runtime:
-      - Explicit task_complete tool call → interaction loop ends
-      - LLM stops calling tools without task_complete → confirm once, then end
-      - Max iterations reached → end
+      - LLM stops calling tools → confirm once, then end using the first idle summary
+      - Any enforced budget is exhausted → end with status=partial, code=budget_exhausted
     """
     if messages is None:
         messages = [{"role": "user", "content": context["task"]}]
@@ -75,18 +140,34 @@ def run_interaction_loop(
     if user_prompt:
         messages.append({"role": "user", "content": user_prompt})
 
-    asked_for_explicit_completion = False
-    loop_warnings = _build_loop_warnings(max_iterations)
+    idle_confirmation_pending = False
+    candidate_summary: str | None = None
+    loop_warnings = _build_loop_warnings()
 
-    for iteration in range(max_iterations):
-        remaining = max_iterations - iteration - 1
+    while True:
+        budget_reason = llm.budget_exhausted()
+        budget = llm.budget_remaining()
+        if budget_reason:
+            logger.warning(f"Stopping interaction loop due to budget exhaustion: {budget_reason}")
+            return {
+                "summary": _budget_exhausted_summary(
+                    budget_reason, budget, candidate_summary
+                )[:500],
+                "status": "partial",
+                "code": "budget_exhausted",
+                "messages": messages,
+            }
+
         for w in loop_warnings:
-            msg = w.check(remaining)
+            msg = w.check(budget)
             if msg:
-                logger.info(f"Loop warning injected (remaining={remaining})")
+                logger.info("Loop warning injected based on remaining budget")
                 messages.append({"role": "user", "content": msg})
 
-        logger.debug(f"Iteration {iteration + 1}/{max_iterations}")
+        logger.debug(
+            "Calling LLM "
+            f"(next_iteration={_dimension(budget, 'iterations').get('used', 0) + 1})"
+        )
 
         response = llm.call(
             [{"role": "system", "content": context["system"]}] + messages,
@@ -95,56 +176,33 @@ def run_interaction_loop(
         messages.append(response.raw_message)
 
         if not response.tool_calls:
-            if not asked_for_explicit_completion:
-                asked_for_explicit_completion = True
-                logger.info("LLM finished without tool calls; requesting explicit task_complete")
+            response_summary = (response.text or "").strip()
+            if not idle_confirmation_pending:
+                candidate_summary = response_summary or "LLM stopped calling tools."
+                idle_confirmation_pending = True
+                logger.info("LLM returned no tool calls; requesting idle confirmation")
                 messages.append(
                     {
                         "role": "user",
                         "content": (
-                            "如果你已经完成了这个 Job 的所有工作，请显式调用 `task_complete` 并提供 `summary`。"
-                            "如果尚未完成，请继续调用必要的工具推进，不要直接结束。"
+                            "如果你还有工作要做，请继续调用必要的工具。"
+                            "如果没有更多工作，这个 Job 将在下一次无工具响应后结束。"
                         ),
                     }
                 )
                 continue
 
-            logger.info("LLM finished without task_complete after confirmation; ending loop")
-            summary = (response.text or "").strip()
-            if not summary:
-                summary = "LLM stopped without explicit task_complete."
+            logger.info("LLM remained idle after confirmation; ending loop")
+            summary = candidate_summary or response_summary or "LLM stopped calling tools."
             return {
                 "summary": summary[:500],
-                "status": "incomplete",
+                "status": "complete",
                 "code": "",
                 "messages": messages,
             }
 
+        idle_confirmation_pending = False
+        candidate_summary = None
         for tc in response.tool_calls:
             result = tools.execute(tc.name, tc.id, tc.arguments, workspace_path)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result.output})
-
-            if result.terminal:
-                if tc.name != "task_complete":
-                    logger.warning(
-                        f"Ignoring terminal signal from non-task_complete tool: {tc.name}"
-                    )
-                    continue
-
-                logger.info("Runtime received terminal signal from task_complete")
-                summary = tc.arguments.get("summary", result.output)
-                status = str(tc.arguments.get("status", "complete") or "complete")
-                return {
-                    "summary": (summary or "")[:500],
-                    "status": status,
-                    "code": "",
-                    "messages": messages,
-                }
-
-    logger.warning(f"Stopped after {max_iterations} iterations")
-    return {
-        "summary": f"Stopped after {max_iterations} iterations",
-        "status": "partial",
-        "code": "budget_exhausted",
-        "messages": messages,
-    }

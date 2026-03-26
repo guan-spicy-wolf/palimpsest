@@ -46,20 +46,9 @@ class TestFileOps:
         result = funcs["list_files"](path="nonexistent", workspace=str(tmp_path))
         assert not result.success
 
-
-class TestTaskComplete:
-    def test_returns_terminal(self):
-        funcs = resolve_tool_functions(EVO_ROOT, ["task_complete"])
-        result = funcs["task_complete"](summary="all done")
-        assert result.success
-        assert result.terminal is True
-        assert "all done" in result.output
-
-    def test_tool_schema(self):
-        funcs = resolve_tool_functions(EVO_ROOT, ["task_complete"])
-        func = funcs["task_complete"]
-        schema = func.__tool_schema__
-        assert schema["function"]["name"] == "task_complete"
+def test_task_complete_tool_is_removed():
+    funcs = resolve_tool_functions(EVO_ROOT, ["task_complete"])
+    assert funcs == {}
 
 
 class TestSpawn:

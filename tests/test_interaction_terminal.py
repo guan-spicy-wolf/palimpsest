@@ -1,4 +1,6 @@
+import json
 from unittest.mock import MagicMock
+
 from palimpsest.runtime.tools import ToolResult
 from palimpsest.stages.interaction import run_interaction_loop
 
@@ -12,9 +14,29 @@ class FakeToolCall:
 
 
 class FakeLLM:
-    def __init__(self, turns):
+    def __init__(self, turns, *, max_iterations=50):
         self._turns = turns
         self.call_count = 0
+        self.max_iterations = max_iterations
+
+    def budget_exhausted(self):
+        if self.call_count >= self.max_iterations:
+            return "max_iterations"
+        return None
+
+    def budget_remaining(self):
+        remaining = max(0, self.max_iterations - self.call_count)
+        return {
+            "iterations": {
+                "used": self.call_count,
+                "limit": self.max_iterations,
+                "remaining": remaining,
+                "limited": True,
+            },
+            "input_tokens": {"used": 0, "limit": None, "remaining": None, "limited": False},
+            "output_tokens": {"used": 0, "limit": None, "remaining": None, "limited": False},
+            "cost": {"used": 0.0, "limit": None, "remaining": None, "limited": False},
+        }
 
     def call(self, messages, tools_schema):
         index = min(self.call_count, len(self._turns) - 1)
@@ -25,7 +47,11 @@ class FakeLLM:
             "role": "assistant",
             "content": text,
             "tool_calls": [
-                {"id": f"tc{i}", "type": "function", "function": {"name": tc[0], "arguments": "{}"}}
+                {
+                    "id": f"tc{i}",
+                    "type": "function",
+                    "function": {"name": tc[0], "arguments": json.dumps(tc[1])},
+                }
                 for i, tc in enumerate(tcs)
             ],
         }
@@ -33,50 +59,52 @@ class FakeLLM:
 
 
 class FakeTools:
+    def __init__(self):
+        self.calls = []
+
     def schema(self):
         return []
 
     def execute(self, name, call_id, args, workspace):
-        if name == "task_complete":
-            return ToolResult(success=True, output="Task complete.", terminal=True)
+        self.calls.append((name, args))
         return ToolResult(success=True, output="ok")
 
 
-def test_interaction_loop_stops_on_terminal():
-    llm = FakeLLM([(None, [("task_complete", {"summary": "done"})])])
-    tools = FakeTools()
-    context = {"system": "test agent", "task": "do nothing"}
-    result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
-    assert llm.call_count == 1
-    assert "summary" in result
-
-
-def test_interaction_loop_terminal_mid_batch():
-    llm = FakeLLM(
-        [(None, [("bash", {"command": "echo hi"}), ("task_complete", {"summary": "done"})])]
-    )
-    tools = FakeTools()
-    context = {"system": "test agent", "task": "do something then complete"}
-    result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
-    assert llm.call_count == 1
-    assert "summary" in result
-
-
-def test_interaction_loop_repompts_then_marks_in_progress():
+def test_interaction_loop_confirms_idle_and_uses_first_summary():
     llm = FakeLLM([
         ("I think I am done.", []),
-        ("Still not calling task_complete.", []),
+        ("This confirmation text should not replace the first summary.", []),
     ])
     tools = FakeTools()
     context = {"system": "test agent", "task": "do nothing"}
-    result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
+    result = run_interaction_loop("job-1", context, "/tmp", llm, tools)
     assert llm.call_count == 2
-    assert result["summary"] == "Still not calling task_complete."
+    assert result["status"] == "complete"
+    assert result["summary"] == "I think I am done."
+
+
+def test_interaction_loop_resets_idle_state_when_tool_calls_resume():
+    llm = FakeLLM(
+        [
+            ("Maybe finished soon.", []),
+            (None, [("bash", {"command": "echo hi"})]),
+            ("Now the work is actually done.", []),
+            ("Ignored confirmation follow-up.", []),
+        ]
+    )
+    tools = FakeTools()
+    context = {"system": "test agent", "task": "do something then stop"}
+    result = run_interaction_loop("job-1", context, "/tmp", llm, tools)
+    assert llm.call_count == 4
+    assert result["summary"] == "Now the work is actually done."
+    assert tools.calls == [("bash", {"command": "echo hi"})]
 
 
 def test_interaction_loop_can_resume_with_user_prompt():
     llm = FakeLLM([
-        (None, [("task_complete", {"summary": "fixed"})]),
+        (None, [("bash", {"command": "echo hi"})]),
+        ("Fixed publication issues.", []),
+        ("Ignored follow-up.", []),
     ])
     tools = FakeTools()
     context = {"system": "test agent", "task": "do nothing"}
@@ -87,40 +115,27 @@ def test_interaction_loop_can_resume_with_user_prompt():
         "/tmp",
         llm,
         tools,
-        max_iterations=10,
         messages=prior_messages,
-        user_prompt="Please fix publication issues and complete.",
+        user_prompt="Please fix publication issues and continue if needed.",
     )
-    assert llm.call_count == 1
-    assert "summary" in result
+    assert llm.call_count == 3
+    assert result["summary"] == "Fixed publication issues."
     assert any(
         message["role"] == "user" and "publication issues" in message["content"]
         for message in result["messages"]
     )
 
 
-def test_non_task_complete_terminal_is_ignored():
-    class NonTaskTerminalTools(FakeTools):
-        def execute(self, name, call_id, args, workspace):
-            if name == "bash":
-                return ToolResult(success=True, output="ok", terminal=True)
-            return super().execute(name, call_id, args, workspace)
-
-    llm = FakeLLM([
-        (None, [("bash", {"command": "echo hi"})]),
-        ("No explicit completion.", []),
-        ("Still no explicit completion.", []),
-    ])
-    tools = NonTaskTerminalTools()
-    context = {"system": "test agent", "task": "do nothing"}
-    result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=10)
-    assert "summary" in result
-
-
 def test_interaction_loop_budget_exhaustion_returns_partial_code():
-    llm = FakeLLM([(None, [("bash", {"command": "echo hi"})])])
+    llm = FakeLLM(
+        [
+            ("Budget nearly exhausted but summary is available.", []),
+        ],
+        max_iterations=1,
+    )
     tools = FakeTools()
-    context = {"system": "test agent", "task": "keep going"}
-    result = run_interaction_loop("job-1", context, "/tmp", llm, tools, max_iterations=1)
+    context = {"system": "test agent", "task": "wrap up quickly"}
+    result = run_interaction_loop("job-1", context, "/tmp", llm, tools)
     assert result["status"] == "partial"
     assert result["code"] == "budget_exhausted"
+    assert result["summary"] == "Budget nearly exhausted but summary is available."
