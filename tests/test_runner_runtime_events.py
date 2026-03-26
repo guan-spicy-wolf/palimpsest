@@ -86,7 +86,7 @@ def test_cleanup_issue_calls_finalize_with_gateway(tmp_path):
     finalize_mock = MagicMock(return_value="cleanup boom")
     patches = _base_patches(emitter, tmp_path)
     patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
-        return_value={"task_status": "complete", "summary": "ok", "messages": []}
+        return_value={"status": "complete", "summary": "ok", "messages": []}
     )
     patches["palimpsest.runner.git.Repo"] = MagicMock()
     patches["palimpsest.runner.find_publication_issues"] = MagicMock(return_value=[])
@@ -166,7 +166,7 @@ def test_job_started_emitted_by_setup_workspace(tmp_path):
     patches["palimpsest.runner._read_evo_sha"] = MagicMock(return_value="evo_abc123")
     patches["palimpsest.runner.setup_workspace"] = setup_mock
     patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
-        return_value={"task_status": "complete", "summary": "ok", "messages": []}
+        return_value={"status": "complete", "summary": "ok", "messages": []}
     )
     patches["palimpsest.runner.git.Repo"] = MagicMock()
     patches["palimpsest.runner.find_publication_issues"] = MagicMock(return_value=[])

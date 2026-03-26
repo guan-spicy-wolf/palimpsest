@@ -63,7 +63,7 @@ class RoleManager:
 
     def resolve(self, role_name: str) -> JobSpec:
         """Expand a Python-defined role into a flat JobSpec."""
-        role_def = self._load_role(role_name)
+        role_def = self.get_definition(role_name)
 
         prompt_text = role_def.prompt
         # If it looks like a path and the file exists, read its contents
@@ -88,6 +88,10 @@ class RoleManager:
         if not roles_dir.exists():
             return []
         return [p.stem for p in roles_dir.glob("*.py") if not p.name.startswith("_")]
+
+    def get_definition(self, name: str) -> RoleDefinition:
+        """Load and return the raw role definition."""
+        return self._load_role(name)
 
     def _load_role(self, name: str) -> RoleDefinition:
         """Dynamically load the role module and extract the RoleDefinition instance."""

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from pathlib import Path
 
 from palimpsest.config import JobConfig
@@ -8,7 +10,7 @@ EVO_ROOT = Path(__file__).parent.parent / "evo"
 
 
 def test_role_manager_loads_described_roles():
-    role = RoleManager(EVO_ROOT)._load_role("planner")
+    role = RoleManager(EVO_ROOT).get_definition("planner")
     assert role.name == "planner"
     assert role.description
 
@@ -29,3 +31,69 @@ def test_available_roles_context_is_scoped_to_team():
     assert "Team: backend" in rendered
     assert "implementer" in rendered
     assert "reviewer" in rendered
+
+
+def test_available_roles_degrades_missing_role():
+    funcs = resolve_context_functions(EVO_ROOT, ["available_roles"])
+    original_resolve = TeamManager.resolve
+
+    def fake_resolve(self, name):
+        return SimpleNamespace(
+            name="broken",
+            description="Broken team",
+            roles=["missing-role"],
+            planner_role="planner",
+            eval_role="evaluator",
+        )
+
+    TeamManager.resolve = fake_resolve
+    try:
+        rendered = funcs["available_roles"](
+            evo_root=str(EVO_ROOT),
+            job_config=JobConfig(team="broken"),
+        )
+    finally:
+        TeamManager.resolve = original_resolve
+    assert "missing-role" in rendered
+    assert "[Unavailable role definition:" in rendered
+
+
+def test_eval_context_includes_child_task_state_summaries():
+    funcs = resolve_context_functions(EVO_ROOT, ["eval_context"])
+
+    class FakeEmitter:
+        def __init__(self, config):
+            pass
+
+        def fetch_all(self, *, type_=None, source=None, limit=100):
+            if type_ == "task.completed":
+                return [
+                    SimpleNamespace(
+                        data={"task_id": "child-1", "summary": "done"},
+                    )
+                ]
+            return []
+
+        def close(self):
+            return None
+
+    original_emitter = funcs["eval_context"].__globals__["EventEmitter"]
+    funcs["eval_context"].__globals__["EventEmitter"] = FakeEmitter
+    try:
+        rendered = funcs["eval_context"](
+            job_config=JobConfig.model_validate(
+                {
+                    "context": {
+                        "eval": {
+                            "task_id": "root",
+                            "goal": "goal",
+                            "child_task_ids": ["child-1"],
+                        }
+                    }
+                }
+            )
+        )
+    finally:
+        funcs["eval_context"].__globals__["EventEmitter"] = original_emitter
+
+    assert "child-1: completed - done" in rendered
