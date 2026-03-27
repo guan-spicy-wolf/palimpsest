@@ -15,6 +15,21 @@ def test_role_manager_loads_described_roles():
     assert role.description
 
 
+def test_planner_role_includes_join_context():
+    spec = RoleManager(EVO_ROOT).resolve("planner", mode="join")
+    context_spec = spec.context_fn(goal="goal")
+    section_types = [section["type"] for section in context_spec["sections"]]
+    assert "join_context" in section_types
+
+
+def test_planner_initial_mode_uses_initial_context():
+    spec = RoleManager(EVO_ROOT).resolve("planner", mode="initial")
+    context_spec = spec.context_fn(goal="goal")
+    section_types = [section["type"] for section in context_spec["sections"]]
+    assert "join_context" not in section_types
+    assert "file_tree" in section_types
+
+
 def test_team_manager_loads_team_definition():
     team = TeamManager(EVO_ROOT).resolve("backend")
     assert team.planner_role == "planner"
@@ -97,3 +112,66 @@ def test_eval_context_includes_child_task_state_summaries():
         funcs["eval_context"].__globals__["EventEmitter"] = original_emitter
 
     assert "child-1: completed - done" in rendered
+
+
+def test_join_context_includes_child_git_ref_and_semantic_summary():
+    funcs = resolve_context_functions(EVO_ROOT, ["join_context"])
+
+    class FakeEmitter:
+        def __init__(self, config):
+            pass
+
+        def fetch_all(self, *, type_=None, source=None, limit=100):
+            if type_ == "supervisor.task.completed":
+                return [
+                    SimpleNamespace(
+                        data={
+                            "task_id": "child-1",
+                            "summary": "done",
+                            "result": {
+                                "semantic": {
+                                    "verdict": "pass",
+                                    "summary": "looks good",
+                                    "criteria_results": [{"criterion": "tests pass", "verdict": "pass"}],
+                                },
+                                "structural": {"success": 1},
+                                "trace": [
+                                    {
+                                        "job_id": "job-1",
+                                        "role": "implementer",
+                                        "outcome": "success",
+                                        "git_ref": "palimpsest/job/demo:deadbeef",
+                                        "summary": "implemented",
+                                    }
+                                ],
+                            },
+                        },
+                    )
+                ]
+            return []
+
+        def close(self):
+            return None
+
+    original_emitter = funcs["join_context"].__globals__["EventEmitter"]
+    funcs["join_context"].__globals__["EventEmitter"] = FakeEmitter
+    try:
+        rendered = funcs["join_context"](
+            job_config=JobConfig.model_validate(
+                {
+                    "context": {
+                        "join": {
+                            "parent_job_id": "parent",
+                            "parent_task_id": "root",
+                            "parent_summary": "Parent goal",
+                            "child_task_ids": ["child-1"],
+                        }
+                    }
+                }
+            )
+        )
+    finally:
+        funcs["join_context"].__globals__["EventEmitter"] = original_emitter
+
+    assert "semantic_summary=looks good" in rendered
+    assert "git_ref=palimpsest/job/demo:deadbeef" in rendered

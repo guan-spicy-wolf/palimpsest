@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import git
+from yoitsu_contracts.config import ToolsConfig
 
-from palimpsest.runtime.tools import resolve_tool_functions, spawn
+from palimpsest.runtime.tools import UnifiedToolGateway, resolve_tool_functions, spawn
 
 EVO_ROOT = Path(__file__).parent.parent / "evo"
 
@@ -49,6 +50,31 @@ class TestFileOps:
 def test_task_complete_tool_is_removed():
     funcs = resolve_tool_functions(EVO_ROOT, ["task_complete"])
     assert funcs == {}
+
+
+def test_unified_tool_gateway_treats_spawn_as_builtin(monkeypatch):
+    requested = []
+
+    def fake_resolve_tool_functions(_evo_root, names):
+        requested.append(list(names))
+        return {}
+
+    monkeypatch.setattr("palimpsest.runtime.tools.resolve_tool_functions", fake_resolve_tool_functions)
+
+    class FakeGateway:
+        def emit(self, _event):
+            return None
+
+    gateway = UnifiedToolGateway(
+        config=ToolsConfig(),
+        evo_root=EVO_ROOT,
+        requested_evo_tools=["spawn", "read_file"],
+        gateway=FakeGateway(),
+    )
+
+    assert requested == [["read_file"]]
+    schemas = gateway.schema()
+    assert any(item["function"]["name"] == "spawn" for item in schemas)
 
 
 class TestSpawn:
