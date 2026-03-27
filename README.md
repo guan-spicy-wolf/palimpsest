@@ -2,6 +2,8 @@
 
 Palimpsest is the single-job runtime for the [Yoitsu](https://github.com/guan-spicy-wolf/yoitsu) stack.
 
+**Version:** 0.3.0
+
 Its scope is intentionally narrow:
 
 - prepare one workspace
