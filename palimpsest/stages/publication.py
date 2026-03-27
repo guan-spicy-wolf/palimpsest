@@ -10,6 +10,12 @@ from loguru import logger
 from palimpsest.config import PublicationConfig
 
 
+class PublicationGuardrailViolation(Exception):
+    def __init__(self, violations: list[str]):
+        self.violations = violations
+        super().__init__("Publication guardrails triggered:\n- " + "\n- ".join(violations))
+
+
 def _push_auth_environment(git_token_env: str) -> dict[str, str]:
     """Build transient git config env for authenticated HTTPS pushes.
 
@@ -109,7 +115,7 @@ def _commit_subject(summary: str, goal: str, *, code: str = "") -> str:
     text = re.sub(r"\s+", " ", text).strip()
     text = text[:72]
     if code == "budget_exhausted":
-        return f"agent.job.completed: {text}"
+        return f"agent.job.completed (budget_exhausted): {text}"
     return f"agent.job.completed: {text}"
 
 

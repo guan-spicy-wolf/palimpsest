@@ -15,8 +15,13 @@ events (completed / failed) and orchestration-level events.
 
 from __future__ import annotations
 
+import io
 import signal
+import subprocess
+import tarfile
+import tempfile
 import traceback
+from contextlib import contextmanager
 from pathlib import Path
 
 import git
@@ -39,8 +44,7 @@ from palimpsest.runtime.roles import JobSpec
 from palimpsest.stages import (
     build_context,
     finalize_workspace_after_job,
-    find_publication_issues,
-    publish_results,
+    PublicationGuardrailViolation,
     run_interaction_loop,
     setup_workspace,
 )
@@ -60,17 +64,16 @@ class ControlledJobFailure(Exception):
 
 def run_job(config: JobConfig) -> None:
     """Resolve the role into a JobSpec and execute the four-stage pipeline."""
-    evo_path = Path.cwd() / _EVO_DIR
+    with _materialize_evo_root(config.evo_sha) as (evo_path, resolved_evo_sha):
+        resolver = RoleManager(evo_path)
+        spec = resolver.resolve(config.role, **dict(config.role_params or {}))
 
-    resolver = RoleManager(evo_path)
-    spec = resolver.resolve(config.role, **dict(config.role_params or {}))
+        logger.info(
+            f"Resolved role '{config.role}' -> JobSpec "
+            f"(source_role={spec.source_role!r}, tools={spec.tools})"
+        )
 
-    logger.info(
-        f"Resolved role '{config.role}' -> JobSpec "
-        f"(source_role={spec.source_role!r}, tools={spec.tools})"
-    )
-
-    _run_job_from_spec(config, spec, evo_path)
+        _run_job_from_spec(config, spec, evo_path, resolved_evo_sha=resolved_evo_sha)
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +81,7 @@ def run_job(config: JobConfig) -> None:
 # ---------------------------------------------------------------------------
 
 def _run_job_from_spec(
-    config: JobConfig, spec: JobSpec, evo_path: Path
+    config: JobConfig, spec: JobSpec, evo_path: Path, *, resolved_evo_sha: str | None = None
 ) -> None:
     job_id = config.job_id
     if not job_id:
@@ -88,22 +91,35 @@ def _run_job_from_spec(
     task_id = config.task_id or job_id
     gateway = EventGateway(emitter, job_id, task_id)
 
-    evo_sha = _read_evo_sha(evo_path)
+    evo_sha = resolved_evo_sha or _read_evo_sha(evo_path)
     logger.info(f"Starting job {job_id} (evo={evo_sha[:8] if evo_sha else '?'})")
 
     _install_timeout(config.timeout)
 
     workspace: str | None = None
+    llm = _setup_llm(config, gateway)
+    cost_tracking_degraded = llm.cost_tracking_degraded()
     try:
+        role_params = dict(config.role_params or {})
+        role_params.setdefault("goal", config.task)
+        role_params.setdefault("repo", config.workspace.repo)
+        role_params.setdefault("init_branch", config.workspace.init_branch)
+        branch_prefix = str(
+            role_params.get("branch_prefix")
+            or getattr(spec.publication_fn, "__publication_branch_prefix__", config.publication.branch_prefix)
+        )
+
         # Stage 1: Workspace (emits stage-transition + job-started internally)
+        workspace_cfg = spec.workspace_fn(**role_params)
         workspace = setup_workspace(
             job_id,
-            config.workspace,
-            config.publication.branch_prefix,
+            workspace_cfg,
+            branch_prefix,
             task_id=config.task_id or job_id,
             goal=config.task,
             gateway=gateway,
             evo_sha=evo_sha,
+            cost_tracking_degraded=cost_tracking_degraded,
         )
 
         # Capture base SHA before any agent modifications (used by guardrails).
@@ -113,16 +129,24 @@ def _run_job_from_spec(
             base_sha = ""
 
         # Stage 2: Context (emits stage-transition internally)
+        context_spec = spec.context_fn(
+            workspace=workspace,
+            job_id=job_id,
+            task=config.task,
+            job_config=config,
+            evo_root=str(evo_path),
+            **role_params,
+        )
         context = build_context(
-            job_id, workspace, config.task, spec, config, gateway, evo_root=evo_path,
+            job_id, workspace, config.task, context_spec, config, gateway, evo_root=evo_path,
         )
 
         # Stage 3+4: Interaction and publication
-        tools = _setup_tools(config, spec, evo_path, gateway)
-        llm = _setup_llm(config, gateway)
+        tools = _setup_tools(config, spec, evo_path, evo_sha, gateway)
         result, git_ref = _stage_interaction_and_publication(
             job_id, context, workspace, config, spec, gateway, tools, llm,
             base_sha=base_sha,
+            role_params=role_params,
         )
 
         gateway.emit(
@@ -131,6 +155,8 @@ def _run_job_from_spec(
                 summary=result.get("summary", ""),
                 status=str(result.get("status", "complete") or "complete"),
                 code=str(result.get("code", "") or ""),
+                budget_dim=str(result.get("budget_dim", "") or ""),
+                cost_tracking_degraded=cost_tracking_degraded,
             )
         )
         logger.info(f"Job {job_id} completed")
@@ -178,10 +204,18 @@ def _setup_tools(
     config: JobConfig,
     spec: JobSpec,
     evo_path: Path,
+    evo_sha: str,
     gateway: EventGateway,
 ) -> UnifiedToolGateway:
     """Create the unified tool gateway from builtin + evo providers."""
-    return UnifiedToolGateway(config.tools, evo_path, spec.tools, gateway)
+    return UnifiedToolGateway(
+        config.tools,
+        evo_path,
+        spec.tools,
+        gateway,
+        evo_sha=evo_sha,
+        tool_timeout_seconds=config.llm.tool_timeout_seconds,
+    )
 
 
 def _setup_llm(config: JobConfig, gateway: EventGateway) -> UnifiedLLMGateway:
@@ -200,6 +234,7 @@ def _stage_interaction_and_publication(
     llm: UnifiedLLMGateway,
     *,
     base_sha: str = "",
+    role_params: dict[str, object] | None = None,
 ) -> tuple[dict, str]:
     """Stage 3+4: interaction loop with publication recovery. Returns (result, git_ref)."""
     from palimpsest.events import StageTransitionData
@@ -223,26 +258,43 @@ def _stage_interaction_and_publication(
         interaction_messages = result["messages"]
         pending_user_prompt = None
 
-        should_publish = bool(config.workspace.repo) and config.publication.strategy != "skip"
+        publication_strategy = str(
+            (role_params or {}).get("publication_strategy")
+            or getattr(spec.publication_fn, "__publication_strategy__", "branch")
+        )
+        should_publish = publication_strategy != "skip"
         if not should_publish:
             return result, None
 
-        # Publication guardrails
         gateway.emit(StageTransitionData(from_stage="interaction", to_stage="publication"))
-        issues = find_publication_issues(git.Repo(workspace), base_sha=base_sha)
-        if issues:
+        try:
+            publication_params = dict(role_params or {})
+            for reserved_key in ("result", "workspace_path", "job_id", "task_id", "goal", "git_token_env", "base_sha"):
+                publication_params.pop(reserved_key, None)
+            git_ref = spec.publication_fn(
+                result=result,
+                workspace_path=workspace,
+                job_id=job_id,
+                task_id=config.task_id or job_id,
+                goal=config.task,
+                git_token_env=config.workspace.git_token_env,
+                base_sha=base_sha,
+                **publication_params,
+            )
+            return result, git_ref
+        except PublicationGuardrailViolation as exc:
             can_retry = publication_recovery_attempts < max_recovery_attempts
             gateway.emit(
                 RuntimeIssueData(
                     stage="publication",
                     fatal=not can_retry,
                     code="publication_guardrail",
-                    violations=issues,
+                    violations=exc.violations,
                 )
             )
             if not can_retry:
                 raise ControlledJobFailure(
-                    "Publication guardrails triggered:\n- " + "\n- ".join(issues),
+                    str(exc),
                     code="publication_guardrail",
                 )
 
@@ -250,22 +302,11 @@ def _stage_interaction_and_publication(
             gateway.emit(StageTransitionData(from_stage="publication", to_stage="interaction"))
             pending_user_prompt = (
                 "Publication was blocked by runtime guardrails.\n"
-                "Issues:\n- " + "\n- ".join(issues) + "\n"
+                "Issues:\n- " + "\n- ".join(exc.violations) + "\n"
                 "Please fix the workspace state, continue using tools if needed, "
                 "and stop calling tools when the job is actually done."
             )
             continue
-
-        git_ref = publish_results(
-            job_id,
-            config.task_id or job_id,
-            config.task,
-            result,
-            workspace,
-            config.publication,
-            git_token_env=config.workspace.git_token_env,
-        )
-        return result, git_ref
 
 
 # ---------------------------------------------------------------------------
@@ -299,3 +340,30 @@ def _read_evo_sha(evo_path: Path) -> str:
     except Exception:
         logger.debug("Could not read evolvable repo HEAD")
         return ""
+
+
+@contextmanager
+def _materialize_evo_root(requested_sha: str | None):
+    live_evo_path = Path.cwd() / _EVO_DIR
+    if not requested_sha:
+        yield live_evo_path, _read_evo_sha(live_evo_path)
+        return
+
+    repo = git.Repo(live_evo_path)
+    resolved_commit = repo.commit(requested_sha).hexsha
+    current_sha = _read_evo_sha(live_evo_path)
+    if current_sha == resolved_commit:
+        yield live_evo_path, resolved_commit
+        return
+
+    with tempfile.TemporaryDirectory(prefix="palimpsest-evo-") as tmpdir:
+        materialized = Path(tmpdir) / "evo"
+        materialized.mkdir(parents=True, exist_ok=True)
+        archive = subprocess.run(
+            ["git", "-C", str(live_evo_path), "archive", "--format=tar", resolved_commit],
+            capture_output=True,
+            check=True,
+        )
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as tar:
+            tar.extractall(materialized)
+        yield materialized, resolved_commit

@@ -14,14 +14,15 @@ class FakeToolCall:
 
 
 class FakeLLM:
-    def __init__(self, turns, *, max_iterations=50):
+    def __init__(self, turns, *, max_iterations=50, max_iterations_hard=0):
         self._turns = turns
         self.call_count = 0
         self.max_iterations = max_iterations
+        self.max_iterations_hard = max_iterations_hard
 
     def budget_exhausted(self):
-        if self.call_count >= self.max_iterations:
-            return "max_iterations"
+        if self.max_iterations_hard > 0 and self.call_count >= self.max_iterations_hard:
+            return "max_iterations_hard"
         return None
 
     def budget_remaining(self):
@@ -32,6 +33,12 @@ class FakeLLM:
                 "limit": self.max_iterations,
                 "remaining": remaining,
                 "limited": True,
+            },
+            "iterations_hard": {
+                "used": self.call_count,
+                "limit": self.max_iterations_hard or None,
+                "remaining": (max(0, self.max_iterations_hard - self.call_count) if self.max_iterations_hard else None),
+                "limited": bool(self.max_iterations_hard),
             },
             "input_tokens": {"used": 0, "limit": None, "remaining": None, "limited": False},
             "output_tokens": {"used": 0, "limit": None, "remaining": None, "limited": False},
@@ -131,11 +138,12 @@ def test_interaction_loop_budget_exhaustion_returns_partial_code():
         [
             ("Budget nearly exhausted but summary is available.", []),
         ],
-        max_iterations=1,
+        max_iterations_hard=1,
     )
     tools = FakeTools()
     context = {"system": "test agent", "task": "wrap up quickly"}
     result = run_interaction_loop("job-1", context, "/tmp", llm, tools)
     assert result["status"] == "partial"
     assert result["code"] == "budget_exhausted"
+    assert result["budget_dim"] == "max_iterations_hard"
     assert result["summary"] == "Budget nearly exhausted but summary is available."

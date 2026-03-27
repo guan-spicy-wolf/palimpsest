@@ -80,11 +80,19 @@ class UnifiedLLMGateway(LLMGateway):
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost = 0.0
-        self._cost_tracking_warned = False
         self._pricing = self._lookup_model_pricing(config.model)
+        self._cost_tracking_state = self._compute_cost_tracking_state(config, self._pricing)
+        provider_default_env = "ANTHROPIC_API_KEY" if config.model.startswith("claude-") else "OPENAI_API_KEY"
+        self._provider_api_key = self._api_key or os.environ.get(provider_default_env, "")
+
+        if self._cost_tracking_state == "degraded":
+            logger.warning(
+                f"Cost budget configured for model {self._config.model!r}, "
+                "but pricing is unknown; token-cost tracking is degraded"
+            )
         
         # Check if we should use mock mode
-        if not self._api_key and not os.environ.get("OPENAI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
+        if not self._provider_api_key:
             logger.warning("No API key found, falling back to MockLLMGateway")
             self._mock_gateway = self._create_mock_gateway()
         else:
@@ -143,18 +151,13 @@ class UnifiedLLMGateway(LLMGateway):
         return response
 
     def budget_exhausted(self) -> str | None:
-        if self._config.max_iterations > 0 and self.total_iterations >= self._config.max_iterations:
-            return "max_iterations"
+        if self._config.max_iterations_hard > 0 and self.total_iterations >= self._config.max_iterations_hard:
+            return "max_iterations_hard"
         if (
             self._config.max_total_input_tokens > 0
             and self.total_input_tokens >= self._config.max_total_input_tokens
         ):
             return "input_tokens"
-        if (
-            self._config.max_total_output_tokens > 0
-            and self.total_output_tokens >= self._config.max_total_output_tokens
-        ):
-            return "output_tokens"
         if self._cost_budget_enabled() and self.total_cost >= self._config.max_total_cost:
             return "cost"
         return None
@@ -162,6 +165,10 @@ class UnifiedLLMGateway(LLMGateway):
     def budget_remaining(self) -> dict[str, dict[str, int | float | bool | None]]:
         return {
             "iterations": self._budget_state(self.total_iterations, self._config.max_iterations),
+            "iterations_hard": self._budget_state(
+                self.total_iterations,
+                self._config.max_iterations_hard,
+            ),
             "input_tokens": self._budget_state(
                 self.total_input_tokens, self._config.max_total_input_tokens
             ),
@@ -175,6 +182,12 @@ class UnifiedLLMGateway(LLMGateway):
             ),
         }
 
+    def cost_tracking_state(self) -> str:
+        return self._cost_tracking_state
+
+    def cost_tracking_degraded(self) -> bool:
+        return self._cost_tracking_state == "degraded"
+
     def _record_usage(self, response: LLMResponse) -> None:
         self.total_iterations += 1
         self.total_input_tokens += max(0, response.input_tokens)
@@ -182,6 +195,7 @@ class UnifiedLLMGateway(LLMGateway):
         cost_estimate = self._estimate_cost(response.input_tokens, response.output_tokens)
         if cost_estimate is not None:
             self.total_cost += cost_estimate
+        self.total_cost += self._iteration_penalty_cost(self.total_iterations)
 
     @classmethod
     def _lookup_model_pricing(cls, model: str) -> tuple[float, float] | None:
@@ -192,14 +206,20 @@ class UnifiedLLMGateway(LLMGateway):
                 return pricing
         return None
 
+    @classmethod
+    def _compute_cost_tracking_state(
+        cls,
+        config: LLMConfig,
+        pricing: tuple[float, float] | None,
+    ) -> str:
+        if config.max_total_cost <= 0:
+            return "disabled"
+        if pricing is None:
+            return "degraded"
+        return "active"
+
     def _estimate_cost(self, input_tokens: int, output_tokens: int) -> float | None:
         if self._pricing is None:
-            if self._config.max_total_cost > 0 and not self._cost_tracking_warned:
-                logger.warning(
-                    f"Cost budget configured for model {self._config.model!r}, "
-                    "but pricing is unknown; cost enforcement is disabled"
-                )
-                self._cost_tracking_warned = True
             return None
         input_rate, output_rate = self._pricing
         return (
@@ -208,7 +228,14 @@ class UnifiedLLMGateway(LLMGateway):
         )
 
     def _cost_budget_enabled(self) -> bool:
-        return self._config.max_total_cost > 0 and self._pricing is not None
+        return self._cost_tracking_state != "disabled"
+
+    def _iteration_penalty_cost(self, iteration: int) -> float:
+        threshold = max(0, self._config.max_iterations)
+        penalty = max(0.0, self._config.iteration_penalty_cost)
+        if threshold <= 0 or penalty <= 0.0 or iteration <= threshold:
+            return 0.0
+        return penalty
 
     @staticmethod
     def _budget_state(
@@ -235,7 +262,7 @@ class UnifiedLLMGateway(LLMGateway):
             raise ImportError("openai package is required. Run: uv add openai")
 
         client = openai.OpenAI(
-            api_key=self._api_key or os.environ.get("OPENAI_API_KEY"),
+            api_key=self._provider_api_key,
             base_url=self._config.api_base if self._config.api_base else None,
         )
 
@@ -319,7 +346,7 @@ class UnifiedLLMGateway(LLMGateway):
             raise ImportError("anthropic package is required. Run: uv add anthropic")
 
         client = anthropic.Anthropic(
-            api_key=self._api_key or os.environ.get("ANTHROPIC_API_KEY"),
+            api_key=self._provider_api_key,
             base_url=self._config.api_base if self._config.api_base else None,
         )
 

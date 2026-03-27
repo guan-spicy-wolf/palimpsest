@@ -2,6 +2,7 @@ from pathlib import Path
 
 import git
 
+from palimpsest.events import JobStartedData
 from palimpsest.config import WorkspaceConfig
 from palimpsest.stages.workspace import setup_workspace
 
@@ -43,3 +44,24 @@ def test_setup_workspace_configures_default_git_identity_for_empty_repo(tmp_path
         branch_prefix="palimpsest/job",
     )
     assert not (Path(workspace) / ".git").exists()
+
+
+def test_setup_workspace_emits_job_started_with_cost_tracking_state(tmp_path):
+    events = []
+
+    class FakeGateway:
+        def emit(self, event):
+            events.append(event)
+
+    workspace = setup_workspace(
+        "job-3",
+        WorkspaceConfig(repo="", init_branch="main"),
+        branch_prefix="palimpsest/job",
+        gateway=FakeGateway(),
+        cost_tracking_degraded=True,
+    )
+
+    assert workspace
+    started = [event for event in events if isinstance(event, JobStartedData)]
+    assert started
+    assert started[-1].cost_tracking_degraded is True

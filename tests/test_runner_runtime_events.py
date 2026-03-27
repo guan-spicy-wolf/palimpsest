@@ -1,5 +1,7 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
+import git
 import pytest
 
 from palimpsest.config import JobConfig
@@ -11,7 +13,8 @@ from palimpsest.events import (
     RuntimeIssueData,
 )
 from palimpsest.runtime.roles import JobSpec
-from palimpsest.runner import ControlledJobFailure, _run_job_from_spec
+from palimpsest.stages.publication import PublicationGuardrailViolation
+from palimpsest.runner import ControlledJobFailure, _run_job_from_spec, run_job
 
 
 class RecordingEmitter:
@@ -27,6 +30,32 @@ class RecordingEmitter:
 
     def close(self):
         return None
+
+
+def _default_publication_fn(
+    *,
+    result=None,
+    repo="",
+    **params,
+):
+    if (result or {}).get("status") == "failed":
+        return None
+    if not repo:
+        return None
+    return "branch:sha"
+
+
+_default_publication_fn.__publication_strategy__ = "branch"
+_default_publication_fn.__publication_branch_prefix__ = "palimpsest/job"
+
+
+def _spec(publication_fn=None) -> JobSpec:
+    return JobSpec(
+        workspace_fn=lambda **params: MagicMock(repo="", init_branch="main", new_branch=True, depth=1, git_token_env=""),
+        context_fn=lambda **params: {"system": "sys", "sections": [], "task": params.get("goal") or params.get("task", "")},
+        publication_fn=publication_fn or _default_publication_fn,
+        tools=[],
+    )
 
 
 def _base_patches(emitter, tmp_path, **overrides):
@@ -61,7 +90,7 @@ def _apply_patches(patches):
 def test_duplicate_tool_names_emit_runtime_issue_and_job_failed(tmp_path):
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-1", task="x")
-    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+    spec = _spec()
 
     # Make UnifiedToolGateway raise ValueError for duplicate tools
     patches = _base_patches(emitter, tmp_path)
@@ -81,7 +110,7 @@ def test_cleanup_issue_calls_finalize_with_gateway(tmp_path):
     """Verify finalize_workspace_after_job is called with the gateway so it can emit events."""
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-1", task="x")
-    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+    spec = _spec()
 
     finalize_mock = MagicMock(return_value="cleanup boom")
     patches = _base_patches(emitter, tmp_path)
@@ -89,8 +118,6 @@ def test_cleanup_issue_calls_finalize_with_gateway(tmp_path):
         return_value={"status": "complete", "summary": "ok", "messages": []}
     )
     patches["palimpsest.runner.git.Repo"] = MagicMock()
-    patches["palimpsest.runner.find_publication_issues"] = MagicMock(return_value=[])
-    patches["palimpsest.runner.publish_results"] = MagicMock(return_value="branch:sha")
     patches["palimpsest.runner.finalize_workspace_after_job"] = finalize_mock
 
     with _apply_patches(patches)[0]:
@@ -108,7 +135,15 @@ def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-1", task="x")
     config.workspace.repo = "https://example.com/repo.git"
-    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+    publication_mock = MagicMock(
+        side_effect=[
+            PublicationGuardrailViolation(["Sensitive-looking file tracked: .env"]),
+            "branch:sha",
+        ]
+    )
+    publication_mock.__publication_strategy__ = "branch"
+    publication_mock.__publication_branch_prefix__ = "palimpsest/job"
+    spec = _spec(publication_fn=publication_mock)
     interaction_results = [
         {"summary": "first", "messages": [{"role": "user", "content": "initial"}]},
         {"summary": "fixed", "messages": [{"role": "user", "content": "initial"}]},
@@ -118,8 +153,6 @@ def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
     patches = _base_patches(emitter, tmp_path)
     patches["palimpsest.runner.run_interaction_loop"] = interaction_mock
     patches["palimpsest.runner.git.Repo"] = MagicMock()
-    patches["palimpsest.runner.find_publication_issues"] = MagicMock(side_effect=[["Sensitive-looking file tracked: .env"], []])
-    patches["palimpsest.runner.publish_results"] = MagicMock(return_value="branch:sha")
 
     with _apply_patches(patches)[0]:
         _run_job_from_spec(config, spec, tmp_path)
@@ -135,13 +168,15 @@ def test_publication_guardrail_can_fail_without_retry(tmp_path):
     config = JobConfig(job_id="job-1", task="x")
     config.workspace.repo = "https://example.com/repo.git"
     config.publication.max_recovery_attempts = 0
-    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+    publication_mock = MagicMock(side_effect=PublicationGuardrailViolation(["Sensitive-looking file tracked: .env"]))
+    publication_mock.__publication_strategy__ = "branch"
+    publication_mock.__publication_branch_prefix__ = "palimpsest/job"
+    spec = _spec(publication_fn=publication_mock)
 
     interaction_mock = MagicMock(return_value={"summary": "first", "messages": []})
     patches = _base_patches(emitter, tmp_path)
     patches["palimpsest.runner.run_interaction_loop"] = interaction_mock
     patches["palimpsest.runner.git.Repo"] = MagicMock()
-    patches["palimpsest.runner.find_publication_issues"] = MagicMock(return_value=["Sensitive-looking file tracked: .env"])
 
     with _apply_patches(patches)[0]:
         with pytest.raises(Exception):
@@ -159,7 +194,7 @@ def test_job_started_emitted_by_setup_workspace(tmp_path):
     """Verify setup_workspace is called with gateway and evo_sha so it can emit JobStartedData."""
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-1", task="x")
-    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+    spec = _spec()
 
     setup_mock = MagicMock(return_value=str(tmp_path))
     patches = _base_patches(emitter, tmp_path)
@@ -169,8 +204,6 @@ def test_job_started_emitted_by_setup_workspace(tmp_path):
         return_value={"status": "complete", "summary": "ok", "messages": []}
     )
     patches["palimpsest.runner.git.Repo"] = MagicMock()
-    patches["palimpsest.runner.find_publication_issues"] = MagicMock(return_value=[])
-    patches["palimpsest.runner.publish_results"] = MagicMock(return_value="branch:sha")
 
     with _apply_patches(patches)[0]:
         _run_job_from_spec(config, spec, tmp_path)
@@ -182,11 +215,34 @@ def test_job_started_emitted_by_setup_workspace(tmp_path):
     assert kwargs["gateway"] is not None
 
 
+def test_runner_propagates_cost_tracking_degraded_flag(tmp_path):
+    emitter = RecordingEmitter()
+    config = JobConfig(job_id="job-1", task="x")
+    config.llm.model = "unknown-model"
+    config.llm.max_total_cost = 0.5
+    publication_mock = MagicMock(return_value="branch:sha")
+    publication_mock.__publication_strategy__ = "branch"
+    publication_mock.__publication_branch_prefix__ = "palimpsest/job"
+    spec = _spec(publication_fn=publication_mock)
+
+    patches = _base_patches(emitter, tmp_path)
+    patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
+        return_value={"status": "partial", "code": "budget_exhausted", "budget_dim": "cost", "summary": "wip", "messages": []}
+    )
+    patches["palimpsest.runner.git.Repo"] = MagicMock()
+
+    with _apply_patches(patches)[0]:
+        _run_job_from_spec(config, spec, tmp_path)
+
+    completed = [event for event in emitter.events if isinstance(event, JobCompletedData)]
+    assert completed[-1].cost_tracking_degraded is True
+
+
 def test_job_timeout_emits_failed_with_timeout_code(tmp_path):
     import time as _time
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-1", task="x", timeout=1)
-    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+    spec = _spec()
 
     def slow_interaction(*args, **kwargs):
         _time.sleep(3)
@@ -210,15 +266,16 @@ def test_job_timeout_emits_failed_with_timeout_code(tmp_path):
 def test_runner_emits_budget_exhausted_code_on_clean_partial_exit(tmp_path):
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-1", task="x")
-    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+    publication_mock = MagicMock(return_value="branch:sha")
+    publication_mock.__publication_strategy__ = "branch"
+    publication_mock.__publication_branch_prefix__ = "palimpsest/job"
+    spec = _spec(publication_fn=publication_mock)
 
     patches = _base_patches(emitter, tmp_path)
     patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
-        return_value={"status": "partial", "code": "budget_exhausted", "summary": "wip", "messages": []}
+        return_value={"status": "partial", "code": "budget_exhausted", "budget_dim": "cost", "summary": "wip", "messages": []}
     )
     patches["palimpsest.runner.git.Repo"] = MagicMock()
-    patches["palimpsest.runner.find_publication_issues"] = MagicMock(return_value=[])
-    patches["palimpsest.runner.publish_results"] = MagicMock(return_value="branch:sha")
 
     with _apply_patches(patches)[0]:
         _run_job_from_spec(config, spec, tmp_path)
@@ -226,25 +283,28 @@ def test_runner_emits_budget_exhausted_code_on_clean_partial_exit(tmp_path):
     completed = [event for event in emitter.events if isinstance(event, JobCompletedData)]
     assert completed
     assert completed[-1].code == "budget_exhausted"
+    assert completed[-1].budget_dim == "cost"
 
 
 def test_runner_skips_publication_for_repoless_job(tmp_path):
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-1", task="x")
     config.workspace.repo = ""
-    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+    publication_mock = MagicMock(side_effect=_default_publication_fn)
+    publication_mock.__publication_strategy__ = "branch"
+    publication_mock.__publication_branch_prefix__ = "palimpsest/job"
+    spec = _spec(publication_fn=publication_mock)
 
     patches = _base_patches(emitter, tmp_path)
     patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
         return_value={"status": "complete", "summary": "meta", "messages": []}
     )
     patches["palimpsest.runner.git.Repo"] = MagicMock(side_effect=Exception("no repo"))
-    patches["palimpsest.runner.publish_results"] = MagicMock(return_value="branch:sha")
 
     with _apply_patches(patches)[0]:
         _run_job_from_spec(config, spec, tmp_path)
 
-    patches["palimpsest.runner.publish_results"].assert_not_called()
+    publication_mock.assert_called_once()
     completed = [event for event in emitter.events if isinstance(event, JobCompletedData)]
     assert completed[-1].git_ref is None
 
@@ -253,15 +313,16 @@ def test_runner_marks_job_failed_when_publication_fails_after_budget_exhaustion(
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-1", task="x")
     config.workspace.repo = "https://example.com/repo.git"
-    spec = JobSpec(prompt="sys", context_template={"sections": []}, tools=[])
+    publication_mock = MagicMock(side_effect=RuntimeError("push failed"))
+    publication_mock.__publication_strategy__ = "branch"
+    publication_mock.__publication_branch_prefix__ = "palimpsest/job"
+    spec = _spec(publication_fn=publication_mock)
 
     patches = _base_patches(emitter, tmp_path)
     patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
-        return_value={"status": "partial", "code": "budget_exhausted", "summary": "wip", "messages": []}
+        return_value={"status": "partial", "code": "budget_exhausted", "budget_dim": "cost", "summary": "wip", "messages": []}
     )
     patches["palimpsest.runner.git.Repo"] = MagicMock()
-    patches["palimpsest.runner.find_publication_issues"] = MagicMock(return_value=[])
-    patches["palimpsest.runner.publish_results"] = MagicMock(side_effect=RuntimeError("push failed"))
 
     with _apply_patches(patches)[0]:
         with pytest.raises(Exception):
@@ -269,3 +330,78 @@ def test_runner_marks_job_failed_when_publication_fails_after_budget_exhaustion(
 
     assert any(isinstance(event, JobFailedData) and "push failed" in event.error for event in emitter.events)
     assert not any(isinstance(event, JobCompletedData) for event in emitter.events)
+
+
+def test_run_job_resolves_role_before_dispatch(monkeypatch, tmp_path):
+    called = {}
+
+    def fake_run_from_spec(config, spec, evo_path, *, resolved_evo_sha=None):
+        called["job_id"] = config.job_id
+        called["source_role"] = spec.source_role
+        called["evo_path"] = evo_path.name
+        called["resolved_evo_sha"] = resolved_evo_sha
+
+    monkeypatch.chdir(Path(__file__).resolve().parent.parent)
+    monkeypatch.setattr("palimpsest.runner._run_job_from_spec", fake_run_from_spec)
+
+    config = JobConfig(job_id="job-1", task="x", role="default")
+    run_job(config)
+
+    assert called["job_id"] == "job-1"
+    assert called["source_role"] == "default"
+    assert called["evo_path"] == "evo"
+
+
+def test_run_job_materializes_requested_evo_sha(monkeypatch, tmp_path):
+    root = tmp_path / "root"
+    evo = root / "evo"
+    roles = evo / "roles"
+    roles.mkdir(parents=True)
+    repo = git.Repo.init(evo)
+    with repo.config_writer() as writer:
+        writer.set_value("user", "name", "Test Agent")
+        writer.set_value("user", "email", "agent@example.com")
+
+    def write_role(version: str) -> None:
+        (roles / "default.py").write_text(
+            "\n".join(
+                [
+                    "from palimpsest.runtime import JobSpec, context_spec, git_publication, role, workspace_config",
+                    "",
+                    "@role(name='default', description='test role')",
+                    "def default_role() -> JobSpec:",
+                    "    return JobSpec(",
+                    "        workspace_fn=workspace_config(),",
+                    "        context_fn=context_spec('sys', []),",
+                    "        publication_fn=git_publication(strategy='skip'),",
+                    f"        tools=['{version}'],",
+                    "    )",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    write_role("v1")
+    repo.index.add(["roles/default.py"])
+    commit_v1 = repo.index.commit("v1").hexsha
+
+    write_role("v2")
+    repo.index.add(["roles/default.py"])
+    repo.index.commit("v2")
+
+    captured = {}
+
+    def fake_run_from_spec(config, spec, evo_path, *, resolved_evo_sha=None):
+        captured["tools"] = spec.tools
+        captured["evo_path"] = evo_path
+        captured["resolved_evo_sha"] = resolved_evo_sha
+
+    monkeypatch.chdir(root)
+    monkeypatch.setattr("palimpsest.runner._run_job_from_spec", fake_run_from_spec)
+
+    run_job(JobConfig(job_id="job-sha", task="x", role="default", evo_sha=commit_v1))
+
+    assert captured["tools"] == ["v1"]
+    assert captured["resolved_evo_sha"] == commit_v1
+    assert captured["evo_path"] != evo

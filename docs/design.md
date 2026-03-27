@@ -30,7 +30,7 @@ Evo providers are loaded with isolated `importlib` scopes. They do not leak into
 Palimpsest does not infer or broadcast task state. It only manages execution of a single job:
 
 - the interaction loop ends when the agent naturally stops calling tools
-- hard budget exhaustion exits through `job.completed(code="budget_exhausted")`
+- budget exhaustion exits through `job.completed(code="budget_exhausted")`
 - publication commits changes and emits `job.completed`
 
 If the runtime itself fails, it emits `job.failed`.

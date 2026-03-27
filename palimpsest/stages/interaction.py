@@ -97,6 +97,7 @@ def _budget_exhausted_summary(reason: str, budget: dict, candidate_summary: str 
 
     reason_messages = {
         "max_iterations": "LLM call budget exhausted before the next interaction step.",
+        "max_iterations_hard": "Hard iteration ceiling exhausted before the next interaction step.",
         "input_tokens": "Input token budget exhausted before the next interaction step.",
         "output_tokens": "Output token budget exhausted before the next interaction step.",
         "cost": "Cost budget exhausted before the next interaction step.",
@@ -105,6 +106,7 @@ def _budget_exhausted_summary(reason: str, budget: dict, candidate_summary: str 
         budget,
         {
             "max_iterations": "iterations",
+            "max_iterations_hard": "iterations_hard",
             "input_tokens": "input_tokens",
             "output_tokens": "output_tokens",
             "cost": "cost",
@@ -155,6 +157,7 @@ def run_interaction_loop(
                 )[:500],
                 "status": "partial",
                 "code": "budget_exhausted",
+                "budget_dim": budget_reason,
                 "messages": messages,
             }
 

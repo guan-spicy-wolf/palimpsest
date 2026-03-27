@@ -37,6 +37,7 @@ def setup_workspace(
     goal: str = "",
     gateway: EventGateway | None = None,
     evo_sha: str = "",
+    cost_tracking_degraded: bool = False,
 ) -> str:
     """Clone repo and create job branch. Returns workspace path.
 
@@ -99,6 +100,7 @@ def setup_workspace(
                 workspace_path=workspace_path,
                 evo_sha=evo_sha,
                 base_sha=base_sha,
+                cost_tracking_degraded=cost_tracking_degraded,
             )
         )
 

@@ -52,7 +52,7 @@ def test_task_complete_tool_is_removed():
 
 
 class TestSpawn:
-    def test_spawn_normalizes_prompt_and_job_spec_defaults(self, tmp_path):
+    def test_spawn_normalizes_goal_role_and_defaults(self, tmp_path):
         repo = git.Repo.init(tmp_path)
         with repo.config_writer() as writer:
             writer.set_value("user", "name", "Test Agent")
@@ -70,7 +70,7 @@ class TestSpawn:
                 emitted.append(event)
 
         result = spawn(
-            tasks=[{"prompt": "Inspect the repository structure"}],
+            tasks=[{"goal": "Inspect the repository structure"}],
             workspace=str(tmp_path),
             gateway=FakeGateway(),
             evo_root=str(EVO_ROOT),
@@ -80,11 +80,10 @@ class TestSpawn:
         assert result.success is True
         event = emitted[0]
         child = event.tasks[0]
-        assert child.prompt == "Inspect the repository structure"
-        assert child.job_spec.repo == "https://github.com/example/repo.git"
-        assert child.job_spec.init_branch == "feature/parent"
-        assert child.job_spec.role == "default"
-        assert child.job_spec.evo_sha
+        assert child.goal == "Inspect the repository structure"
+        assert child.role == "default"
+        assert child.params["repo"] == "https://github.com/example/repo.git"
+        assert child.sha
 
     def test_spawn_accepts_legacy_task_and_role_fields(self, tmp_path):
         repo = git.Repo.init(tmp_path)
@@ -112,9 +111,9 @@ class TestSpawn:
 
         assert result.success is True
         child = emitted[0].tasks[0]
-        assert child.prompt == "Review docs"
-        assert child.job_spec.role == "default"
-        assert child.job_spec.init_branch == "docs-branch"
+        assert child.goal == "Review docs"
+        assert child.role == "default"
+        assert child.params["branch"] == "docs-branch"
 
     def test_spawn_accepts_goal_budget_and_role_fn(self, tmp_path):
         repo = git.Repo.init(tmp_path)
@@ -141,7 +140,6 @@ class TestSpawn:
 
         assert result.success is True
         child = emitted[0].tasks[0]
-        assert child.prompt == "Implement OAuth2 login endpoint"
-        assert child.job_spec.role == "implementer"
-        assert child.job_spec.llm["max_total_cost"] == 0.6
-        assert child.job_spec.llm["max_iterations"] == 0
+        assert child.goal == "Implement OAuth2 login endpoint"
+        assert child.role == "implementer"
+        assert child.budget == 0.6

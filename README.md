@@ -10,9 +10,10 @@ Its scope is intentionally narrow:
 - publish results
 - emit job events consumed by Trenni
 
-When the runtime reaches a hard budget limit such as `max_iterations`, it exits
-cleanly through `agent.job.completed` with `code="budget_exhausted"`. Trenni maps
-that to `supervisor.task.partial`.
+When the runtime reaches an enforced budget limit such as `cost`,
+`input_tokens`, or the wide safety backstop `max_iterations_hard`, it exits
+cleanly through `agent.job.completed` with `code="budget_exhausted"`. Trenni
+maps that to `supervisor.task.partial`.
 
 It does not schedule siblings, evaluate spawn conditions, or own checkpoint state. Those responsibilities live in Trenni.
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from loguru import logger
+from palimpsest.config import PublicationConfig, WorkspaceConfig
 
 
 @dataclass
@@ -23,8 +24,9 @@ class RoleMetadata:
 
 @dataclass
 class JobSpec:
-    prompt: str
-    context_template: dict
+    workspace_fn: Callable[..., Any]
+    context_fn: Callable[..., dict]
+    publication_fn: Callable[..., str | None]
     tools: list[str] = field(default_factory=list)
     source_role: str = ""
 
@@ -37,6 +39,93 @@ class TeamDefinition:
     planner_role: str = "planner"
     eval_role: str = "evaluator"
     worker_roles: list[str] = field(default_factory=list)
+
+
+def workspace_config(
+    *,
+    repo: str = "",
+    init_branch: str = "main",
+    new_branch: bool = True,
+    depth: int = 1,
+) -> Callable[..., WorkspaceConfig]:
+    def fn(**params: Any) -> WorkspaceConfig:
+        return WorkspaceConfig(
+            repo=str(params.get("repo", repo) or repo),
+            init_branch=str(params.get("branch", params.get("init_branch", init_branch)) or init_branch),
+            new_branch=bool(params.get("new_branch", new_branch)),
+            depth=int(params.get("depth", depth)),
+        )
+
+    return fn
+
+
+def git_publication(
+    *,
+    strategy: str = "branch",
+    branch_prefix: str = "palimpsest/job",
+) -> Callable[..., str | None]:
+    def fn(
+        *,
+        result: dict[str, Any],
+        workspace_path: str,
+        job_id: str,
+        task_id: str,
+        goal: str,
+        git_token_env: str = "",
+        base_sha: str = "",
+        **params: Any,
+    ) -> str | None:
+        import git
+
+        from palimpsest.stages.finalization import find_publication_issues
+        from palimpsest.stages.publication import PublicationGuardrailViolation, publish_results
+
+        config = PublicationConfig(
+            strategy=str(params.get("publication_strategy", strategy) or strategy),
+            branch_prefix=str(params.get("branch_prefix", branch_prefix) or branch_prefix),
+        )
+        if result.get("status") == "failed":
+            return None
+        if config.strategy == "skip":
+            return None
+
+        try:
+            repo = git.Repo(workspace_path)
+        except git.InvalidGitRepositoryError:
+            return None
+
+        issues = find_publication_issues(repo, base_sha=base_sha)
+        if issues:
+            raise PublicationGuardrailViolation(issues)
+
+        return publish_results(
+            job_id,
+            task_id,
+            goal,
+            result,
+            workspace_path,
+            config,
+            git_token_env=git_token_env,
+        )
+
+    fn.__publication_strategy__ = strategy
+    fn.__publication_branch_prefix__ = branch_prefix
+
+    return fn
+
+
+def context_spec(
+    system: str,
+    sections: list[dict[str, Any]],
+) -> Callable[..., dict]:
+    def fn(**params: Any) -> dict:
+        return {
+            "system": system,
+            "sections": list(sections),
+            "task": str(params.get("goal", params.get("task", ""))),
+        }
+
+    return fn
 
 
 def role(
@@ -77,7 +166,7 @@ class RoleManager:
         if not isinstance(spec, JobSpec):
             raise TypeError(f"Role '{role_name}' returned {type(spec).__name__}, expected JobSpec")
         spec.source_role = role_name
-        return self._materialize_prompt(spec)
+        return spec
 
     def list_roles(self) -> list[str]:
         return [meta.name for meta in self.list_definitions()]
@@ -138,20 +227,6 @@ class RoleManager:
                 return attr, meta
 
         raise ValueError(f"No @role-decorated function found in {py_path}")
-
-    def _materialize_prompt(self, spec: JobSpec) -> JobSpec:
-        prompt_text = spec.prompt
-        if prompt_text.endswith(".md") or prompt_text.endswith(".txt"):
-            potential_path = self._root / prompt_text
-            if potential_path.is_file():
-                prompt_text = potential_path.read_text(encoding="utf-8")
-        return JobSpec(
-            prompt=prompt_text,
-            context_template=dict(spec.context_template),
-            tools=list(spec.tools),
-            source_role=spec.source_role,
-        )
-
 
 class TeamManager:
     def __init__(self, evo_root: str | Path):

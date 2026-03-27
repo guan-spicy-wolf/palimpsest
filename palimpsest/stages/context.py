@@ -21,7 +21,7 @@ def build_context(
     job_id: str,
     workspace_path: str,
     task: str,
-    spec: JobSpec,
+    context_spec: dict,
     job_config: JobConfig,
     gateway: EventGateway,
     evo_root: Path | None = None,
@@ -30,9 +30,13 @@ def build_context(
     from palimpsest.events import StageTransitionData
     gateway.emit(StageTransitionData(from_stage="workspace", to_stage="context"))
 
-    system_prompt = spec.prompt
-
-    sections = spec.context_template.get("sections", [])
+    system_prompt = context_spec.get("system", "")
+    if isinstance(system_prompt, str) and evo_root is not None:
+        if system_prompt.endswith(".md") or system_prompt.endswith(".txt"):
+            potential_path = evo_root / system_prompt
+            if potential_path.is_file():
+                system_prompt = potential_path.read_text(encoding="utf-8")
+    sections = context_spec.get("sections", [])
     section_types = [s.get("type", "") for s in sections]
 
     registry = {}
@@ -73,6 +77,9 @@ def build_context(
         else:
             logger.warning(f"No provider for context section type: {section_type!r}")
 
+    explicit_task = str(context_spec.get("task", "") or task)
+    if explicit_task and not parts:
+        parts.append(explicit_task)
     task_message = "\n\n".join(parts)
     logger.info(f"Built context for job {job_id}")
     return {"system": system_prompt, "task": task_message}

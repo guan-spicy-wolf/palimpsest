@@ -55,7 +55,7 @@ def _function_to_schema(func: Callable) -> dict:
     required = []
 
     # Exclude injected runtime dependencies from schema
-    injected_args = {"workspace", "gateway", "evo_root"}
+    injected_args = {"workspace", "gateway", "evo_root", "evo_sha"}
 
     for name, param in sig.parameters.items():
         if name in injected_args:
@@ -158,57 +158,28 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
         raise ValueError("Each spawn task requires a non-empty goal/prompt")
 
     defaults = _infer_spawn_job_defaults(workspace, evo_sha)
-    job_spec = dict(task.get("job_spec") or {})
 
     role = task.get("role") or task.get("role_fn")
     if not role and task.get("role_file"):
         role_file = str(task["role_file"])
         role = role_file.removeprefix("roles/").removesuffix(".py")
 
-    if task.get("repo") and not job_spec.get("repo"):
-        job_spec["repo"] = task["repo"]
-    if task.get("init_branch") and not job_spec.get("init_branch"):
-        job_spec["init_branch"] = task["init_branch"]
-    if task.get("branch") and not job_spec.get("init_branch"):
-        job_spec["init_branch"] = task["branch"]
-    if role and not job_spec.get("role"):
-        job_spec["role"] = role
-    if task.get("evo_sha") and not job_spec.get("evo_sha"):
-        job_spec["evo_sha"] = task["evo_sha"]
-    if task.get("role_sha") and not job_spec.get("evo_sha"):
-        job_spec["evo_sha"] = task["role_sha"]
-
-    for key in ("llm", "workspace", "publication"):
-        if isinstance(task.get(key), dict) and not job_spec.get(key):
-            job_spec[key] = dict(task[key])
-
     budget = task.get("budget")
-    if isinstance(budget, (int, float)) and budget > 0:
-        llm_cfg = dict(job_spec.get("llm") or {})
-        llm_cfg.setdefault("max_total_cost", float(budget))
-        llm_cfg.setdefault("max_iterations", 0)
-        job_spec["llm"] = llm_cfg
-
-    normalized_job_spec = {
-        "repo": job_spec.get("repo") or defaults["repo"],
-        "init_branch": job_spec.get("init_branch") or defaults["init_branch"],
-        "role": job_spec.get("role") or defaults["role"],
-        "evo_sha": job_spec.get("evo_sha") or defaults["evo_sha"],
-        "llm": dict(job_spec.get("llm") or defaults["llm"]),
-        "workspace": dict(job_spec.get("workspace") or defaults["workspace"]),
-        "publication": dict(job_spec.get("publication") or defaults["publication"]),
-    }
 
     eval_spec = task.get("eval_spec")
     normalized_eval_spec = EvalSpec.model_validate(eval_spec) if isinstance(eval_spec, dict) else None
     return SpawnTaskData(
         prompt=prompt,
         goal=prompt,
-        role=str(role or ""),
+        role=str(role or defaults["role"]),
         budget=float(budget) if isinstance(budget, (int, float)) else 0.0,
-        sha=normalized_job_spec["evo_sha"] or None,
-        params={k: v for k, v in task.items() if k not in {"prompt", "goal", "task", "role", "role_fn", "budget", "eval_spec", "job_spec", "repo", "init_branch", "branch", "evo_sha", "role_sha", "llm", "workspace", "publication"}},
-        job_spec=normalized_job_spec,
+        sha=task.get("sha") or task.get("evo_sha") or task.get("role_sha") or defaults["evo_sha"] or None,
+        params={
+            **({"repo": task["repo"]} if task.get("repo") else ({ "repo": defaults["repo"] } if defaults["repo"] else {})),
+            **({"branch": task["branch"]} if task.get("branch") else {}),
+            **({"init_branch": task["init_branch"]} if task.get("init_branch") else {}),
+            **({k: v for k, v in task.items() if k not in {"prompt", "goal", "task", "role", "role_fn", "role_file", "budget", "eval_spec", "sha", "evo_sha", "role_sha"}}),
+        },
         eval_spec=normalized_eval_spec,
     )
 
@@ -219,6 +190,7 @@ def spawn(
     workspace: str,
     gateway: EventGateway,
     evo_root: str,
+    evo_sha: str = "",
     wait_for: str = "all_complete",
     on_fail: str = "continue",
 ) -> ToolResult:
@@ -235,10 +207,11 @@ def spawn(
     if not tasks:
         return ToolResult(success=False, output="No tasks provided to spawn")
 
-    try:
-        evo_sha = git.Repo(Path(evo_root)).head.commit.hexsha
-    except Exception:
-        evo_sha = ""
+    if not evo_sha:
+        try:
+            evo_sha = git.Repo(Path(evo_root)).head.commit.hexsha
+        except Exception:
+            evo_sha = ""
 
     normalized_tasks: list[SpawnTaskData] = []
     try:
@@ -348,10 +321,14 @@ class UnifiedToolGateway:
         evo_root: Path,
         requested_evo_tools: list[str],
         gateway: EventGateway,
+        evo_sha: str = "",
+        tool_timeout_seconds: float = 300.0,
     ):
         self._gateway = gateway
         self._config = config
         self._evo_root = evo_root
+        self._evo_sha = evo_sha
+        self._tool_timeout_seconds = tool_timeout_seconds
         
         # Load builtins
         disabled = set(config.disabled_builtins)
@@ -360,6 +337,9 @@ class UnifiedToolGateway:
         if "bash" not in disabled:
             # Wrap bash with config injection
             def bash_with_config(command: str, workspace: str) -> ToolResult:
+                if "bash" not in self._config.builtin:
+                    self._config.builtin["bash"] = {}
+                self._config.builtin["bash"].setdefault("timeout", self._tool_timeout_seconds)
                 return bash(command, workspace, config=self._config)
             bash_with_config.__tool_schema__ = bash.__tool_schema__
             bash_with_config.__is_tool__ = True
@@ -405,6 +385,8 @@ class UnifiedToolGateway:
                 kwargs["gateway"] = self._gateway
             if "evo_root" in sig.parameters:
                 kwargs["evo_root"] = str(self._evo_root)
+            if "evo_sha" in sig.parameters:
+                kwargs["evo_sha"] = self._evo_sha
 
             result = func(**kwargs)
             
