@@ -22,6 +22,8 @@ from palimpsest.config import ToolsConfig
 from palimpsest.events import EvalSpec, SpawnRequestData, SpawnTaskData, ToolExecData, ToolResultData
 from palimpsest.runtime.event_gateway import EventGateway
 
+BUILTIN_TOOL_NAMES = {"bash", "spawn"}
+
 
 @dataclass
 class ToolResult:
@@ -184,6 +186,75 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
     )
 
 
+_SPAWN_SCHEMA: dict = {
+    "type": "function",
+    "function": {
+        "name": "spawn",
+        "description": "Request the Supervisor to spawn child tasks. Each child runs in an isolated git clone; the runtime auto-commits and pushes on success.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "description": "List of child tasks to spawn.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "prompt": {
+                                "type": "string",
+                                "description": "Concrete task description for the child agent.",
+                            },
+                            "role": {
+                                "type": "string",
+                                "description": "Team role to assign (e.g. 'implementer', 'reviewer').",
+                            },
+                            "budget": {
+                                "type": "number",
+                                "description": "Cost budget for the child job.",
+                            },
+                            "repo": {
+                                "type": "string",
+                                "description": "Git repository URL for the child workspace.",
+                            },
+                            "init_branch": {
+                                "type": "string",
+                                "description": "Branch to clone from.",
+                            },
+                            "eval_spec": {
+                                "type": "object",
+                                "description": "Evaluation specification for the child task.",
+                                "properties": {
+                                    "deliverables": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "Tangible outputs expected from the task.",
+                                    },
+                                    "criteria": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "How the task should be verified.",
+                                    },
+                                },
+                            },
+                        },
+                        "required": ["prompt", "role"],
+                    },
+                },
+                "wait_for": {
+                    "type": "string",
+                    "description": "Join condition: 'all_complete' (default) or 'any_success'.",
+                },
+                "on_fail": {
+                    "type": "string",
+                    "description": "Failure policy: 'continue' (default) or 'cancel_siblings'.",
+                },
+            },
+            "required": ["tasks"],
+        },
+    },
+}
+
+
 @tool
 def spawn(
     tasks: list,
@@ -194,16 +265,7 @@ def spawn(
     wait_for: str = "all_complete",
     on_fail: str = "continue",
 ) -> ToolResult:
-    """Request the Supervisor to spawn child tasks.
-    
-    tasks: List of child tasks to spawn.
-      Minimal planner form:
-      {"role": "...", "goal": "...", "budget": 0.60, "eval_spec": {...}}
-      Optional per-task `eval_spec`:
-      {"role": "...", "deliverables": ["..."], "criteria": ["..."], "metadata": {...}}
-    wait_for: Join condition ('all_complete' or 'any_success').
-    on_fail: Failure policy ('continue' or 'cancel_siblings').
-    """
+    """Request the Supervisor to spawn child tasks. Each child runs in an isolated git clone; the runtime auto-commits and pushes on success."""
     if not tasks:
         return ToolResult(success=False, output="No tasks provided to spawn")
 
@@ -238,6 +300,10 @@ def spawn(
             "The Supervisor will handle orchestration."
         ),
     )
+
+# Override the auto-generated schema with the hand-crafted one that includes
+# items definitions for the tasks array, so models know the expected shape.
+spawn.__tool_schema__ = _SPAWN_SCHEMA
 
 
 # ---------------------------------------------------------------------------
@@ -330,11 +396,14 @@ class UnifiedToolGateway:
         self._evo_sha = evo_sha
         self._tool_timeout_seconds = tool_timeout_seconds
         
-        # Load builtins
+        # Load builtins — only include builtins that appear in the role's
+        # requested tool list (or all if no evo tools are requested, for
+        # backwards compatibility).
         disabled = set(config.disabled_builtins)
+        requested = set(requested_evo_tools)
         self._functions: dict[str, Callable] = {}
-        
-        if "bash" not in disabled:
+
+        if "bash" not in disabled and ("bash" in requested or not requested):
             # Wrap bash with config injection
             def bash_with_config(command: str, workspace: str) -> ToolResult:
                 if "bash" not in self._config.builtin:
@@ -344,10 +413,11 @@ class UnifiedToolGateway:
             bash_with_config.__tool_schema__ = bash.__tool_schema__
             bash_with_config.__is_tool__ = True
             self._functions["bash"] = bash_with_config
-        if "spawn" not in disabled:
+        if "spawn" not in disabled and ("spawn" in requested or not requested):
             self._functions["spawn"] = spawn
         # Load evo tools
-        evo_funcs = resolve_tool_functions(evo_root, requested_evo_tools)
+        requested_evo = [name for name in requested_evo_tools if name not in BUILTIN_TOOL_NAMES]
+        evo_funcs = resolve_tool_functions(evo_root, requested_evo)
         
         dups = find_duplicate_tool_names(self._functions, evo_funcs)
         if dups:
