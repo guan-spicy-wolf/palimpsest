@@ -1,9 +1,10 @@
 from pathlib import Path
 
 import git
+import httpx
 from yoitsu_contracts.config import ToolsConfig
 
-from palimpsest.runtime.tools import UnifiedToolGateway, resolve_tool_functions, spawn
+from palimpsest.runtime.tools import UnifiedToolGateway, create_pr, resolve_tool_functions, spawn
 
 EVO_ROOT = Path(__file__).parent.parent / "evo"
 
@@ -52,7 +53,7 @@ def test_task_complete_tool_is_removed():
     assert funcs == {}
 
 
-def test_unified_tool_gateway_treats_spawn_as_builtin(monkeypatch):
+def test_unified_tool_gateway_treats_builtin_tools_as_builtin(monkeypatch):
     requested = []
 
     def fake_resolve_tool_functions(_evo_root, names):
@@ -68,13 +69,14 @@ def test_unified_tool_gateway_treats_spawn_as_builtin(monkeypatch):
     gateway = UnifiedToolGateway(
         config=ToolsConfig(),
         evo_root=EVO_ROOT,
-        requested_evo_tools=["spawn", "read_file"],
+        requested_evo_tools=["spawn", "create_pr", "read_file"],
         gateway=FakeGateway(),
     )
 
     assert requested == [["read_file"]]
     schemas = gateway.schema()
     assert any(item["function"]["name"] == "spawn" for item in schemas)
+    assert any(item["function"]["name"] == "create_pr" for item in schemas)
 
 
 class TestSpawn:
@@ -169,3 +171,49 @@ class TestSpawn:
         assert child.goal == "Implement OAuth2 login endpoint"
         assert child.role == "implementer"
         assert child.budget == 0.6
+
+
+def test_create_pr_calls_github_api(monkeypatch):
+    captured = {}
+
+    def fake_post(url, *, headers, json, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return httpx.Response(
+            201,
+            json={"html_url": "https://github.com/example/repo/pull/42", "number": 42},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setattr("palimpsest.runtime.tools.httpx.post", fake_post)
+
+    result = create_pr(
+        repo="https://github.com/example/repo.git",
+        head_branch="palimpsest/job/demo",
+        base_branch="main",
+        title="Demo PR",
+        body="Body",
+    )
+
+    assert result.success is True
+    assert '"pr_url": "https://github.com/example/repo/pull/42"' in result.output
+    assert captured["url"] == "https://api.github.com/repos/example/repo/pulls"
+    assert captured["json"]["head"] == "palimpsest/job/demo"
+    assert captured["json"]["base"] == "main"
+    assert captured["headers"]["Authorization"] == "Bearer test-token"
+
+
+def test_create_pr_rejects_non_github_repo():
+    result = create_pr(
+        repo="https://gitlab.com/example/repo.git",
+        head_branch="feature/demo",
+        base_branch="main",
+        title="Demo PR",
+        body="Body",
+    )
+
+    assert result.success is False
+    assert "Unsupported repository host" in result.output

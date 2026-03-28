@@ -9,20 +9,25 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import json
+import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, get_type_hints
+from urllib.parse import urlparse
 
 import git
+import httpx
 from loguru import logger
 
 from palimpsest.config import ToolsConfig
 from palimpsest.events import EvalSpec, SpawnRequestData, SpawnTaskData, ToolExecData, ToolResultData
 from palimpsest.runtime.event_gateway import EventGateway
 
-BUILTIN_TOOL_NAMES = {"bash", "spawn"}
+BUILTIN_TOOL_NAMES = {"bash", "spawn", "create_pr"}
 
 
 @dataclass
@@ -306,6 +311,164 @@ def spawn(
 spawn.__tool_schema__ = _SPAWN_SCHEMA
 
 
+def _github_repo_slug(repo: str) -> tuple[str, str]:
+    text = (repo or "").strip()
+    if not text:
+        raise ValueError("repo is required")
+
+    path = ""
+    if text.startswith("git@github.com:"):
+        path = text.split(":", 1)[1]
+    else:
+        parsed = urlparse(text)
+        host = (parsed.hostname or "").lower()
+        if host != "github.com":
+            raise ValueError(f"Unsupported repository host: {host or text}")
+        path = parsed.path.lstrip("/")
+
+    path = path.removesuffix(".git").strip("/")
+    match = re.fullmatch(r"([^/]+)/([^/]+)", path)
+    if not match:
+        raise ValueError(f"Could not parse GitHub repository slug from: {repo}")
+    return match.group(1), match.group(2)
+
+
+def _github_token(git_token_env: str = "") -> tuple[str, str]:
+    candidates = []
+    if git_token_env:
+        candidates.append(git_token_env)
+    candidates.extend(["GITHUB_TOKEN", "GH_TOKEN"])
+
+    seen: set[str] = set()
+    for name in candidates:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value, name
+    raise ValueError("No GitHub token found. Set git_token_env, GITHUB_TOKEN, or GH_TOKEN.")
+
+
+_CREATE_PR_SCHEMA: dict = {
+    "type": "function",
+    "function": {
+        "name": "create_pr",
+        "description": (
+            "Create a GitHub pull request from an existing branch. "
+            "Use this in planner join mode after a child task passed eval."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repo": {
+                    "type": "string",
+                    "description": "GitHub repository URL, such as https://github.com/org/repo or git@github.com:org/repo.git.",
+                },
+                "head_branch": {
+                    "type": "string",
+                    "description": "Existing branch containing the work to review.",
+                },
+                "base_branch": {
+                    "type": "string",
+                    "description": "Target branch for the pull request.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Pull request title.",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Pull request body in Markdown.",
+                },
+                "git_token_env": {
+                    "type": "string",
+                    "description": "Optional environment variable name holding the GitHub token.",
+                },
+            },
+            "required": ["repo", "head_branch", "base_branch", "title", "body"],
+        },
+    },
+}
+
+
+@tool
+def create_pr(
+    repo: str,
+    head_branch: str,
+    base_branch: str,
+    title: str,
+    body: str,
+    git_token_env: str = "",
+) -> ToolResult:
+    """Create a GitHub pull request from an existing branch."""
+    head_branch = (head_branch or "").strip()
+    base_branch = (base_branch or "").strip()
+    title = (title or "").strip()
+    if not head_branch:
+        return ToolResult(success=False, output="head_branch is required")
+    if not base_branch:
+        return ToolResult(success=False, output="base_branch is required")
+    if not title:
+        return ToolResult(success=False, output="title is required")
+
+    try:
+        owner, repo_name = _github_repo_slug(repo)
+        token, token_source = _github_token(git_token_env)
+    except ValueError as exc:
+        return ToolResult(success=False, output=str(exc))
+
+    try:
+        response = httpx.post(
+            f"https://api.github.com/repos/{owner}/{repo_name}/pulls",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            json={
+                "title": title,
+                "body": body,
+                "head": head_branch,
+                "base": base_branch,
+            },
+            timeout=30.0,
+        )
+    except httpx.HTTPError as exc:
+        return ToolResult(success=False, output=f"GitHub PR create failed: {exc}")
+
+    if response.is_success:
+        payload = response.json()
+        return ToolResult(
+            success=True,
+            output=json.dumps(
+                {
+                    "pr_url": payload.get("html_url", ""),
+                    "number": payload.get("number"),
+                    "repo": f"{owner}/{repo_name}",
+                    "head_branch": head_branch,
+                    "base_branch": base_branch,
+                    "token_env": token_source,
+                },
+                ensure_ascii=True,
+            ),
+        )
+
+    detail = ""
+    try:
+        payload = response.json()
+        detail = str(payload.get("message") or payload)
+    except Exception:
+        detail = response.text.strip()
+    return ToolResult(
+        success=False,
+        output=f"GitHub PR create failed ({response.status_code}): {detail or 'unknown error'}",
+    )
+
+
+create_pr.__tool_schema__ = _CREATE_PR_SCHEMA
+
+
 # ---------------------------------------------------------------------------
 # Tool Loader
 # ---------------------------------------------------------------------------
@@ -415,6 +578,8 @@ class UnifiedToolGateway:
             self._functions["bash"] = bash_with_config
         if "spawn" not in disabled and ("spawn" in requested or not requested):
             self._functions["spawn"] = spawn
+        if "create_pr" not in disabled and ("create_pr" in requested or not requested):
+            self._functions["create_pr"] = create_pr
         # Load evo tools
         requested_evo = [name for name in requested_evo_tools if name not in BUILTIN_TOOL_NAMES]
         evo_funcs = resolve_tool_functions(evo_root, requested_evo)

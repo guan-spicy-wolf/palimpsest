@@ -20,6 +20,7 @@ def test_planner_role_includes_join_context():
     context_spec = spec.context_fn(goal="goal")
     section_types = [section["type"] for section in context_spec["sections"]]
     assert "join_context" in section_types
+    assert "create_pr" in spec.tools
 
 
 def test_planner_initial_mode_uses_initial_context():
@@ -122,6 +123,17 @@ def test_join_context_includes_child_git_ref_and_semantic_summary():
             pass
 
         def fetch_all(self, *, type_=None, source=None, limit=100):
+            if type_ == "supervisor.job.launched":
+                return [
+                    SimpleNamespace(
+                        data={
+                            "task_id": "child-1",
+                            "job_id": "job-1",
+                            "repo": "https://github.com/example/repo.git",
+                            "init_branch": "main",
+                        },
+                    )
+                ]
             if type_ == "supervisor.task.completed":
                 return [
                     SimpleNamespace(
@@ -174,4 +186,7 @@ def test_join_context_includes_child_git_ref_and_semantic_summary():
         funcs["join_context"].__globals__["EventEmitter"] = original_emitter
 
     assert "semantic_summary=looks good" in rendered
+    assert "publication_target: repo=https://github.com/example/repo.git base_branch=main head_branch=palimpsest/job/demo" in rendered
+    assert "repo=https://github.com/example/repo.git" in rendered
+    assert "base_branch=main" in rendered
     assert "git_ref=palimpsest/job/demo:deadbeef" in rendered
