@@ -100,17 +100,21 @@ def _run_job_from_spec(
     llm = _setup_llm(config, gateway)
     cost_tracking_degraded = llm.cost_tracking_degraded()
     try:
+        # Per ADR-0007: role_params contains only role-internal flags
+        # goal is config.task, passed explicitly to workspace_fn and context_fn
         role_params = dict(config.role_params or {})
-        role_params.setdefault("goal", config.task)
-        role_params.setdefault("repo", config.workspace.repo)
-        role_params.setdefault("init_branch", config.workspace.init_branch)
         branch_prefix = str(
             role_params.get("branch_prefix")
             or getattr(spec.publication_fn, "__publication_branch_prefix__", config.publication.branch_prefix)
         )
 
         # Stage 1: Workspace (emits stage-transition + job-started internally)
-        workspace_cfg = spec.workspace_fn(**role_params)
+        workspace_cfg = spec.workspace_fn(
+            goal=config.task,  # explicit goal parameter
+            repo=config.workspace.repo,
+            init_branch=config.workspace.init_branch,
+            **role_params,
+        )
         workspace = setup_workspace(
             job_id,
             workspace_cfg,
@@ -129,10 +133,11 @@ def _run_job_from_spec(
             base_sha = ""
 
         # Stage 2: Context (emits stage-transition internally)
+        # Per ADR-0007: goal passed explicitly, not via role_params
         context_spec = spec.context_fn(
             workspace=workspace,
             job_id=job_id,
-            task=config.task,
+            goal=config.task,  # explicit goal parameter
             job_config=config,
             evo_root=str(evo_path),
             **role_params,

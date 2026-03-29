@@ -38,10 +38,15 @@ def workspace_config(
     new_branch: bool = True,
     depth: int = 1,
 ) -> Callable[..., WorkspaceConfig]:
-    def fn(**params: Any) -> WorkspaceConfig:
+    """Build workspace configuration.
+
+    Per ADR-0007: accepts explicit 'goal' parameter (ignored, as goal is not
+    workspace config). 'repo' and 'init_branch' come from spawn payload or role defaults.
+    """
+    def fn(*, goal: str = "", repo: str = "", init_branch: str = "", new_branch: bool = True, depth: int = depth, **params: Any) -> WorkspaceConfig:
         return WorkspaceConfig(
-            repo=str(params.get("repo", repo) or repo),
-            init_branch=str(params.get("branch", params.get("init_branch", init_branch)) or init_branch),
+            repo=str(repo or params.get("repo", "") or params.get("repo", "")),
+            init_branch=str(init_branch or params.get("branch", params.get("init_branch", "main")) or "main"),
             new_branch=bool(params.get("new_branch", new_branch)),
             depth=int(params.get("depth", depth)),
         )
