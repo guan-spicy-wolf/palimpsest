@@ -9,17 +9,7 @@ from typing import Any, Callable
 
 from loguru import logger
 from palimpsest.config import PublicationConfig, WorkspaceConfig
-
-
-@dataclass
-class RoleMetadata:
-    name: str
-    description: str
-    teams: list[str] = field(default_factory=lambda: ["default"])
-    role_type: str = "worker"
-    min_cost: float = 0.0
-    recommended_cost: float = 0.0
-    min_capability: str = ""
+from yoitsu_contracts.role_metadata import RoleMetadata, RoleMetadataReader
 
 
 @dataclass
@@ -118,11 +108,17 @@ def context_spec(
     system: str,
     sections: list[dict[str, Any]],
 ) -> Callable[..., dict]:
-    def fn(**params: Any) -> dict:
+    """Build context specification for LLM.
+
+    Per ADR-0007: accepts explicit 'goal' parameter (not via **params).
+    'task' is accepted as an alias for backward compatibility.
+    """
+    def fn(*, goal: str = "", task: str = "", **params: Any) -> dict:
+        effective_goal = goal or task
         return {
             "system": system,
             "sections": list(sections),
-            "task": str(params.get("goal", params.get("task", ""))),
+            "task": effective_goal,
         }
 
     return fn
@@ -138,6 +134,11 @@ def role(
     recommended_cost: float = 0.0,
     min_capability: str = "",
 ) -> Callable[[Callable[..., JobSpec]], Callable[..., JobSpec]]:
+    """Decorator for role functions.
+
+    Per ADR-0007: all arguments must be literal expressions (string/numeric).
+    This allows AST-based metadata extraction via RoleMetadataReader.
+    """
     def decorator(func: Callable[..., JobSpec]) -> Callable[..., JobSpec]:
         func.__role_metadata__ = RoleMetadata(
             name=name,
@@ -153,11 +154,19 @@ def role(
     return decorator
 
 
-class RoleManager:
-    def __init__(self, evo_root: str | Path):
-        self._root = Path(evo_root)
+class RoleManager(RoleMetadataReader):
+    """Extends RoleMetadataReader with resolve() for full JobSpec execution.
+
+    Per ADR-0007:
+    - RoleMetadataReader (yoitsu-contracts): AST-based metadata extraction
+    - RoleManager (palimpsest): executes role modules to produce JobSpec
+    """
+
+    def __init__(self, evo_root: str | Path) -> None:
+        super().__init__(evo_root)
 
     def resolve(self, role_name: str, **params: Any) -> JobSpec:
+        """Load and execute role module to produce JobSpec."""
         func = self._load_role_function(role_name)
         try:
             spec = func(**params)
@@ -170,25 +179,6 @@ class RoleManager:
 
     def list_roles(self) -> list[str]:
         return [meta.name for meta in self.list_definitions()]
-
-    def list_definitions(self) -> list[RoleMetadata]:
-        roles_dir = self._root / "roles"
-        if not roles_dir.exists():
-            return []
-        result: list[RoleMetadata] = []
-        for py_path in sorted(roles_dir.glob("*.py")):
-            if py_path.name.startswith("_"):
-                continue
-            try:
-                _, meta = self._load_role_module(py_path)
-                result.append(meta)
-            except Exception as exc:
-                logger.error(f"Failed to load role metadata from {py_path}: {exc}")
-        return result
-
-    def get_definition(self, name: str) -> RoleMetadata:
-        _, meta = self._load_role_by_name(name)
-        return meta
 
     def _load_role_function(self, name: str) -> Callable[..., JobSpec]:
         func, _ = self._load_role_by_name(name)
@@ -206,6 +196,7 @@ class RoleManager:
         *,
         expected_name: str | None = None,
     ) -> tuple[Callable[..., JobSpec], RoleMetadata]:
+        """Load and execute a role module to extract function and metadata."""
         module_name = f"_evo_roles_{py_path.stem}"
         spec = importlib.util.spec_from_file_location(module_name, py_path)
         if spec is None or spec.loader is None:
