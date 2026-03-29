@@ -44,9 +44,11 @@ def workspace_config(
     workspace config). 'repo' and 'init_branch' come from spawn payload or role defaults.
     """
     def fn(*, goal: str = "", repo: str = "", init_branch: str = "", new_branch: bool = True, depth: int = depth, **params: Any) -> WorkspaceConfig:
+        # ADR-0007 D4: repo and init_branch come from spawn payload via explicit
+        # kwargs (set by runner from JobConfig.workspace). params fallback removed.
         return WorkspaceConfig(
-            repo=str(repo or params.get("repo", "") or params.get("repo", "")),
-            init_branch=str(init_branch or params.get("branch", params.get("init_branch", "main")) or "main"),
+            repo=str(repo),
+            init_branch=str(init_branch or "main"),
             new_branch=bool(params.get("new_branch", new_branch)),
             depth=int(params.get("depth", depth)),
         )
