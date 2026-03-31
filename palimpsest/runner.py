@@ -46,7 +46,8 @@ from palimpsest.stages import (
     finalize_workspace_after_job,
     PublicationGuardrailViolation,
     run_interaction_loop,
-    setup_workspace,
+    run_preparation,  # ADR-0009: canonical name
+    setup_workspace,  # Backward compatibility alias
 )
 
 # The evolvable repo is always located at <project_root>/evo.
@@ -101,15 +102,16 @@ def _run_job_from_spec(
     cost_tracking_degraded = llm.cost_tracking_degraded()
     try:
         # Per ADR-0007: role_params contains only role-internal flags
-        # goal is config.task, passed explicitly to workspace_fn and context_fn
+        # goal is config.task, passed explicitly to preparation_fn and context_fn
         role_params = dict(config.role_params or {})
         branch_prefix = str(
             role_params.get("branch_prefix")
             or getattr(spec.publication_fn, "__publication_branch_prefix__", config.publication.branch_prefix)
         )
 
-        # Stage 1: Workspace (emits stage-transition + job-started internally)
-        workspace_cfg = spec.workspace_fn(
+        # Stage 1: Preparation (emits stage-transition + job-started internally)
+        # Per ADR-0009: preparation_fn is the canonical name (workspace_fn is alias)
+        workspace_cfg = spec.preparation_fn(
             goal=config.task,  # explicit goal parameter
             repo=config.workspace.repo,
             init_branch=config.workspace.init_branch,

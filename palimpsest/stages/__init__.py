@@ -1,4 +1,4 @@
-from palimpsest.stages.workspace import setup_workspace
+from palimpsest.stages.preparation import run_preparation, setup_workspace
 from palimpsest.stages.context import build_context
 from palimpsest.stages.interaction import run_interaction_loop
 from palimpsest.stages.publication import PublicationGuardrailViolation, publish_results
@@ -8,7 +8,8 @@ from palimpsest.stages.finalization import (
 )
 
 __all__ = [
-    "setup_workspace",
+    "run_preparation",
+    "setup_workspace",  # Backward compatibility alias
     "build_context",
     "run_interaction_loop",
     "PublicationGuardrailViolation",

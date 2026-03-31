@@ -14,11 +14,29 @@ from yoitsu_contracts.role_metadata import RoleMetadata, RoleMetadataReader
 
 @dataclass
 class JobSpec:
-    workspace_fn: Callable[..., Any]
-    context_fn: Callable[..., dict]
-    publication_fn: Callable[..., str | None]
+    """Job specification from role definition.
+    
+    Per ADR-0009: preparation_fn is the canonical name for workspace setup.
+    workspace_fn is accepted as an alternative for backward compatibility.
+    """
+    preparation_fn: Callable[..., Any] | None = None  # ADR-0009: canonical name
+    context_fn: Callable[..., dict] | None = None
+    publication_fn: Callable[..., str | None] | None = None
     tools: list[str] = field(default_factory=list)
     source_role: str = ""
+    workspace_fn: Callable[..., Any] | None = None  # Backward compatibility
+    
+    def __post_init__(self):
+        # Handle backward compatibility: if workspace_fn is provided but not preparation_fn,
+        # use workspace_fn as preparation_fn
+        if self.preparation_fn is None and self.workspace_fn is not None:
+            self.preparation_fn = self.workspace_fn
+        if self.preparation_fn is None:
+            raise ValueError("JobSpec requires preparation_fn (or workspace_fn for backward compat)")
+        if self.context_fn is None:
+            raise ValueError("JobSpec requires context_fn")
+        if self.publication_fn is None:
+            raise ValueError("JobSpec requires publication_fn")
 
 
 @dataclass
