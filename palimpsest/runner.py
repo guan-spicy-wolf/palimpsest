@@ -162,6 +162,7 @@ def _run_job_from_spec(
                 code=str(result.get("code", "") or ""),
                 budget_dim=str(result.get("budget_dim", "") or ""),
                 cost_tracking_degraded=cost_tracking_degraded,
+                cost=llm.total_cost,  # ADR-0010: actual cost for budget_variance
             )
         )
         logger.info(f"Job {job_id} completed")
