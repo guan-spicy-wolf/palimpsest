@@ -1,6 +1,22 @@
 from pathlib import Path
 
-from palimpsest.config import JobConfig
+from palimpsest.config import JobConfig, PreparationConfig, WorkspaceConfig
+
+
+def test_preparation_config_is_workspace_config_alias():
+    """PreparationConfig is the new name for WorkspaceConfig (ADR-0009 D1)."""
+    # PreparationConfig is the canonical name
+    prep = PreparationConfig(repo="https://github.com/example/test")
+    assert prep.repo == "https://github.com/example/test"
+    assert prep.init_branch == "main"
+    assert prep.new_branch == True
+    
+    # WorkspaceConfig is an alias for backward compatibility
+    ws = WorkspaceConfig(repo="https://github.com/example/repo")
+    assert ws.repo == "https://github.com/example/repo"
+    
+    # They are the same class
+    assert PreparationConfig is WorkspaceConfig
 
 
 def test_job_config_accepts_publication_strategy(tmp_path: Path):

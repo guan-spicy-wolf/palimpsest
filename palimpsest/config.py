@@ -5,9 +5,10 @@ from yoitsu_contracts.config import (
     JobContextConfig,
     JoinContextConfig,
     LLMConfig,
+    PreparationConfig,  # ADR-0009 D1: new canonical name
     PublicationConfig,
     ToolsConfig,
-    WorkspaceConfig,
+    WorkspaceConfig,  # ADR-0009 D1: retained as alias
 )
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "JobContextConfig",
     "JoinContextConfig",
     "LLMConfig",
+    "PreparationConfig",
     "PublicationConfig",
     "ToolsConfig",
     "WorkspaceConfig",
