@@ -115,6 +115,11 @@ def test_degraded_cost_tracking_warns_at_initialization():
 
 
 def test_iteration_penalty_rolls_into_cost_budget():
+    """Iteration penalty still accumulates cost, but cost is NOT an enforcement dimension.
+    
+    Per ADR-0004 D3: iteration penalty is suspended for enforcement.
+    Per ADR-0004 D7: cost is NOT checked in budget_exhausted().
+    """
     llm = UnifiedLLMGateway(
         LLMConfig(
             model="unknown-model",
@@ -138,8 +143,9 @@ def test_iteration_penalty_rolls_into_cost_budget():
     llm._record_usage(response)
     llm._record_usage(response)
 
-    assert llm.total_cost == 0.6
-    assert llm.budget_exhausted() == "cost"
+    assert llm.total_cost == 0.6  # Cost still accumulates
+    # Per ADR-0004 D7: cost is NOT an enforcement dimension
+    assert llm.budget_exhausted() is None  # Cost exhaustion does NOT trigger
 
 
 def test_hard_iteration_ceiling_is_independent_backstop():

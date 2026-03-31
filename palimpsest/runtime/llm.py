@@ -151,6 +151,12 @@ class UnifiedLLMGateway(LLMGateway):
         return response
 
     def budget_exhausted(self) -> str | None:
+        """Check if any system backstop is exhausted.
+        
+        Per ADR-0004 D1, D7: cost is NOT an enforcement dimension.
+        Only iterations_hard, input_tokens, output_tokens trigger termination.
+        Cost tracking remains active for observation but not enforcement.
+        """
         if self._config.max_iterations_hard > 0 and self.total_iterations >= self._config.max_iterations_hard:
             return "max_iterations_hard"
         if (
@@ -158,8 +164,13 @@ class UnifiedLLMGateway(LLMGateway):
             and self.total_input_tokens >= self._config.max_total_input_tokens
         ):
             return "input_tokens"
-        if self._cost_budget_enabled() and self.total_cost >= self._config.max_total_cost:
-            return "cost"
+        if (
+            self._config.max_total_output_tokens > 0
+            and self.total_output_tokens >= self._config.max_total_output_tokens
+        ):
+            return "output_tokens"
+        # NOTE: cost is intentionally NOT checked here per ADR-0004
+        # Cost tracking remains active for observation but not enforcement
         return None
 
     def budget_remaining(self) -> dict[str, dict[str, int | float | bool | None]]:
