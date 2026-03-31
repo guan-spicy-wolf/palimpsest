@@ -4,9 +4,51 @@ from pathlib import Path
 
 from palimpsest.config import JobConfig
 from palimpsest.runtime.contexts import resolve_context_functions
-from palimpsest.runtime.roles import RoleManager, TeamManager
+from palimpsest.runtime.roles import RoleManager, TeamManager, role, RoleMetadata
 
 EVO_ROOT = Path(__file__).parent.parent / "evo"
+
+
+def test_role_decorator_accepts_max_cost():
+    """Role decorator accepts max_cost parameter (ADR-0004 D1a)."""
+    @role(name="test", description="test role", max_cost=5.00)
+    def test_role(**params):
+        pass
+
+    assert test_role.__role_metadata__.max_cost == 5.00
+
+
+def test_role_decorator_max_cost_defaults_to_10():
+    """Role decorator max_cost defaults to 10.0 when not specified."""
+    @role(name="default_test", description="default test")
+    def default_role(**params):
+        pass
+
+    assert default_role.__role_metadata__.max_cost == 10.0
+
+
+def test_planner_role_has_conservative_max_cost():
+    """Planner role has conservative max_cost per ADR-0004."""
+    manager = RoleManager(EVO_ROOT)
+    meta = manager.get_definition("planner")
+    assert meta is not None
+    assert meta.max_cost == 0.50  # Conservative default per ADR-0004
+
+
+def test_implementer_role_max_cost():
+    """Implementer role has appropriate max_cost."""
+    manager = RoleManager(EVO_ROOT)
+    meta = manager.get_definition("implementer")
+    assert meta is not None
+    assert meta.max_cost == 2.00  # Per ADR-0004
+
+
+def test_reviewer_role_max_cost():
+    """Reviewer role has appropriate max_cost."""
+    manager = RoleManager(EVO_ROOT)
+    meta = manager.get_definition("reviewer")
+    assert meta is not None
+    assert meta.max_cost == 1.00  # Per ADR-0004
 
 
 def test_role_manager_loads_described_roles():

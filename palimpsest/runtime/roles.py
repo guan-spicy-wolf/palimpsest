@@ -139,6 +139,7 @@ def role(
     role_type: str = "worker",
     min_cost: float = 0.0,
     recommended_cost: float = 0.0,
+    max_cost: float = 10.0,  # ADR-0004 D1a: per-job ceiling for spawn-time validation
     min_capability: str = "",
 ) -> Callable[[Callable[..., JobSpec]], Callable[..., JobSpec]]:
     """Decorator for role functions.
@@ -154,6 +155,7 @@ def role(
             role_type=role_type,
             min_cost=min_cost,
             recommended_cost=recommended_cost,
+            max_cost=max_cost,  # ADR-0004 D1a
             min_capability=min_capability,
         )
         return func
