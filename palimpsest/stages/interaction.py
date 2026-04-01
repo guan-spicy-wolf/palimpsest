@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from loguru import logger
 
 from palimpsest.runtime.llm import LLMGateway
 from palimpsest.runtime.tools import UnifiedToolGateway
+
+if TYPE_CHECKING:
+    from palimpsest.runtime.context import RuntimeContext
 
 
 # ---------------------------------------------------------------------------
@@ -127,12 +130,15 @@ def run_interaction_loop(
     tools: UnifiedToolGateway,
     messages: list[dict] | None = None,
     user_prompt: str | None = None,
+    runtime_context: RuntimeContext | None = None,
 ) -> dict:
     """Core agent loop. Returns {"summary": str, "status": str, "code": str, "messages": list}.
 
     Completion is determined by the runtime:
       - LLM stops calling tools → confirm once, then end using the first idle summary
       - Any enforced budget is exhausted → end with status=partial, code=budget_exhausted
+
+    ADR-0011: runtime_context is passed to tools.execute() for injection into tool calls.
     """
     if messages is None:
         messages = [{"role": "user", "content": context["task"]}]
@@ -207,5 +213,5 @@ def run_interaction_loop(
         idle_confirmation_pending = False
         candidate_summary = None
         for tc in response.tool_calls:
-            result = tools.execute(tc.name, tc.id, tc.arguments, workspace_path)
+            result = tools.execute(tc.name, tc.id, tc.arguments, workspace_path, runtime_context=runtime_context)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result.output})

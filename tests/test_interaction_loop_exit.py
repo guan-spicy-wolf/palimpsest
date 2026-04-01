@@ -72,7 +72,7 @@ class FakeTools:
     def schema(self):
         return []
 
-    def execute(self, name, call_id, args, workspace):
+    def execute(self, name, call_id, args, workspace, runtime_context=None):
         self.calls.append((name, args))
         return ToolResult(success=True, output="ok")
 

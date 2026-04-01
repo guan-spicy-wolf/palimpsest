@@ -15,6 +15,7 @@ events (completed / failed) and orchestration-level events.
 
 from __future__ import annotations
 
+import inspect
 import io
 import signal
 import subprocess
@@ -36,6 +37,7 @@ from palimpsest.events import (
 )
 from palimpsest.runtime import (
     EventGateway,
+    RuntimeContext,
     UnifiedLLMGateway,
     RoleManager,
     UnifiedToolGateway,
@@ -97,6 +99,13 @@ def _run_job_from_spec(
 
     _install_timeout(config.timeout)
 
+    # Create RuntimeContext at job start (ADR-0011 D6)
+    runtime_context = RuntimeContext(
+        job_id=job_id,
+        task_id=task_id,
+        team=config.team,
+    )
+
     workspace: str | None = None
     llm = _setup_llm(config, gateway)
     cost_tracking_degraded = llm.cost_tracking_degraded()
@@ -111,12 +120,17 @@ def _run_job_from_spec(
 
         # Stage 1: Preparation (emits stage-transition + job-started internally)
         # Per ADR-0009: preparation_fn is the canonical name (workspace_fn is alias)
-        workspace_cfg = spec.preparation_fn(
-            goal=config.task,  # explicit goal parameter
-            repo=config.workspace.repo,
-            init_branch=config.workspace.init_branch,
+        # ADR-0011: pass runtime_context if preparation_fn accepts it
+        prep_params = {
+            "goal": config.task,
+            "repo": config.workspace.repo,
+            "init_branch": config.workspace.init_branch,
             **role_params,
-        )
+        }
+        prep_sig = inspect.signature(spec.preparation_fn)
+        if "runtime_context" in prep_sig.parameters:
+            prep_params["runtime_context"] = runtime_context
+        workspace_cfg = spec.preparation_fn(**prep_params)
         workspace = setup_workspace(
             job_id,
             workspace_cfg,
@@ -127,6 +141,9 @@ def _run_job_from_spec(
             evo_sha=evo_sha,
             cost_tracking_degraded=cost_tracking_degraded,
         )
+
+        # ADR-0011: set workspace_path after workspace setup
+        runtime_context.workspace_path = workspace
 
         # Capture base SHA before any agent modifications (used by guardrails).
         try:
@@ -154,6 +171,7 @@ def _run_job_from_spec(
             job_id, context, workspace, config, spec, gateway, tools, llm,
             base_sha=base_sha,
             role_params=role_params,
+            runtime_context=runtime_context,
         )
 
         gateway.emit(
@@ -199,6 +217,9 @@ def _run_job_from_spec(
         raise
 
     finally:
+        # ADR-0011: cleanup RuntimeContext first, then workspace
+        if 'runtime_context' in locals():
+            runtime_context.cleanup()
         if workspace:
             finalize_workspace_after_job(workspace, gateway=gateway)
         gateway.close()
@@ -243,6 +264,7 @@ def _stage_interaction_and_publication(
     *,
     base_sha: str = "",
     role_params: dict[str, object] | None = None,
+    runtime_context: RuntimeContext | None = None,
 ) -> tuple[dict, str]:
     """Stage 3+4: interaction loop with publication recovery. Returns (result, git_ref)."""
     from palimpsest.events import StageTransitionData
@@ -262,6 +284,7 @@ def _stage_interaction_and_publication(
             tools,
             messages=interaction_messages,
             user_prompt=pending_user_prompt,
+            runtime_context=runtime_context,  # ADR-0011: pass to tools via injection
         )
         interaction_messages = result["messages"]
         pending_user_prompt = None
@@ -277,8 +300,12 @@ def _stage_interaction_and_publication(
         gateway.emit(StageTransitionData(from_stage="interaction", to_stage="publication"))
         try:
             publication_params = dict(role_params or {})
-            for reserved_key in ("result", "workspace_path", "job_id", "task_id", "goal", "git_token_env", "base_sha"):
+            for reserved_key in ("result", "workspace_path", "job_id", "task_id", "goal", "git_token_env", "base_sha", "runtime_context"):
                 publication_params.pop(reserved_key, None)
+            # ADR-0011: pass runtime_context if publication_fn accepts it
+            pub_sig = inspect.signature(spec.publication_fn)
+            if "runtime_context" in pub_sig.parameters and runtime_context is not None:
+                publication_params["runtime_context"] = runtime_context
             git_ref = spec.publication_fn(
                 result=result,
                 workspace_path=workspace,
