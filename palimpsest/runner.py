@@ -68,7 +68,7 @@ class ControlledJobFailure(Exception):
 def run_job(config: JobConfig) -> None:
     """Resolve the role into a JobSpec and execute the four-stage pipeline."""
     with _materialize_evo_root(config.evo_sha) as (evo_path, resolved_evo_sha):
-        resolver = RoleManager(evo_path)
+        resolver = RoleManager(evo_path, team=config.team)
         spec = resolver.resolve(config.role, **dict(config.role_params or {}))
 
         logger.info(
