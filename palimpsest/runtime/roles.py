@@ -187,13 +187,24 @@ class RoleManager(RoleMetadataReader):
     Per ADR-0007:
     - RoleMetadataReader (yoitsu-contracts): AST-based metadata extraction
     - RoleManager (palimpsest): executes role modules to produce JobSpec
+
+    Per ADR-0011 (D2, D7):
+    - Supports two-layer role resolution: team-specific roles shadow global
+    - Resolution order: evo/teams/<team>/roles/<name>.py → evo/roles/<name>.py
     """
 
-    def __init__(self, evo_root: str | Path) -> None:
+    def __init__(self, evo_root: str | Path, team: str = "default") -> None:
         super().__init__(evo_root)
+        self._team = team
+        self._team_roles_dir = self._root / "teams" / team / "roles"
 
     def resolve(self, role_name: str, **params: Any) -> JobSpec:
-        """Load and execute role module to produce JobSpec."""
+        """Load and execute role module to produce JobSpec.
+
+        Per ADR-0011: Uses two-layer resolution:
+        1. evo/teams/<team>/roles/<name>.py (if exists)
+        2. evo/roles/<name>.py (fallback)
+        """
         func = self._load_role_function(role_name)
         try:
             spec = func(**params)
@@ -204,14 +215,61 @@ class RoleManager(RoleMetadataReader):
         spec.source_role = role_name
         return spec
 
+    def get_definition(self, name: str) -> RoleMetadata | None:
+        """Get a specific role definition by name, using two-layer resolution.
+
+        Per ADR-0011: Checks team-specific roles first, then falls back to global.
+        """
+        # Try team-specific first
+        if self._team_roles_dir.exists():
+            team_path = self._team_roles_dir / f"{name}.py"
+            if team_path.exists():
+                meta = self._read_role_file(team_path)
+                if meta:
+                    return meta
+
+        # Fallback to global
+        return super().get_definition(name)
+
     def list_roles(self) -> list[str]:
         return [meta.name for meta in self.list_definitions()]
+
+    def list_definitions(self) -> list[RoleMetadata]:
+        """List all role definitions, merging team-specific with global.
+
+        Per ADR-0011: Team-specific roles shadow global roles with same name.
+        """
+        # Start with global roles
+        global_roles = super().list_definitions()
+        global_by_name = {meta.name: meta for meta in global_roles}
+
+        # Add/override with team-specific roles
+        if self._team_roles_dir.exists():
+            for py_path in sorted(self._team_roles_dir.glob("*.py")):
+                if py_path.name.startswith("_"):
+                    continue
+                meta = self._read_role_file(py_path)
+                if meta:
+                    global_by_name[meta.name] = meta
+
+        return list(global_by_name.values())
 
     def _load_role_function(self, name: str) -> Callable[..., JobSpec]:
         func, _ = self._load_role_by_name(name)
         return func
 
     def _load_role_by_name(self, name: str) -> tuple[Callable[..., JobSpec], RoleMetadata]:
+        """Load role module using two-layer resolution.
+
+        Per ADR-0011: Checks team-specific first, then falls back to global.
+        """
+        # Try team-specific first
+        if self._team_roles_dir.exists():
+            team_path = self._team_roles_dir / f"{name}.py"
+            if team_path.exists():
+                return self._load_role_module(team_path, expected_name=name)
+
+        # Fallback to global
         py_path = self._root / "roles" / f"{name}.py"
         if not py_path.exists():
             raise FileNotFoundError(f"Role definition not found: {name} (expected {py_path})")
