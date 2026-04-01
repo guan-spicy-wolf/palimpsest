@@ -25,6 +25,7 @@ from loguru import logger
 
 from palimpsest.config import ToolsConfig
 from palimpsest.events import EvalSpec, SpawnRequestData, SpawnTaskData, ToolExecData, ToolResultData
+from palimpsest.runtime.context import RuntimeContext
 from palimpsest.runtime.event_gateway import EventGateway
 
 BUILTIN_TOOL_NAMES = {"bash", "spawn", "create_pr"}
@@ -62,7 +63,7 @@ def _function_to_schema(func: Callable) -> dict:
     required = []
 
     # Exclude injected runtime dependencies from schema
-    injected_args = {"workspace", "gateway", "evo_root", "evo_sha"}
+    injected_args = {"workspace", "gateway", "evo_root", "evo_sha", "runtime_context"}
 
     for name, param in sig.parameters.items():
         if name in injected_args:
@@ -596,7 +597,14 @@ class UnifiedToolGateway:
     def schema(self) -> list[dict]:
         return self._schemas
 
-    def execute(self, name: str, call_id: str, args: dict, workspace: str) -> ToolResult:
+    def execute(
+        self,
+        name: str,
+        call_id: str,
+        args: dict,
+        workspace: str,
+        runtime_context: RuntimeContext | None = None,
+    ) -> ToolResult:
         func = self._functions.get(name)
         if not func:
             return ToolResult(success=False, output=f"Unknown tool: {name}")
@@ -622,6 +630,8 @@ class UnifiedToolGateway:
                 kwargs["evo_root"] = str(self._evo_root)
             if "evo_sha" in sig.parameters:
                 kwargs["evo_sha"] = self._evo_sha
+            if "runtime_context" in sig.parameters and runtime_context is not None:
+                kwargs["runtime_context"] = runtime_context
 
             result = func(**kwargs)
             
