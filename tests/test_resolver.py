@@ -16,7 +16,7 @@ def test_resolve_discovers_decorated_tools(tmp_path):
             \"\"\"Say hi.\"\"\"
             return ToolResult(success=True, output="hello")
     """))
-    result = resolve_tool_functions(tmp_path, ["greet"])
+    result = resolve_tool_functions(tmp_path, "default", ["greet"])
     assert "greet" in result
     assert result["greet"]().output == "hello"
 
@@ -33,7 +33,7 @@ def test_resolve_no_sys_modules_leak(tmp_path):
             return ToolResult(success=True, output="ok")
     """))
     before = set(sys.modules.keys())
-    resolve_tool_functions(tmp_path, ["leak"])
+    resolve_tool_functions(tmp_path, "default", ["leak"])
     after = set(sys.modules.keys())
     new_modules = after - before
     assert not any("leak_check" in m for m in new_modules)
@@ -55,7 +55,7 @@ def test_resolve_filters_to_requested_only(tmp_path):
             \"\"\"Tool b.\"\"\"
             return ToolResult(success=True, output="b")
     """))
-    result = resolve_tool_functions(tmp_path, ["a"])
+    result = resolve_tool_functions(tmp_path, "default", ["a"])
     assert "a" in result
     assert "b" not in result
 
@@ -70,7 +70,7 @@ def test_resolve_warns_missing(tmp_path):
     log_sink = io.StringIO()
     sink_id = logger.add(log_sink, format="{message}", level="WARNING")
     try:
-        resolve_tool_functions(tmp_path, ["nonexistent"])
+        resolve_tool_functions(tmp_path, "default", ["nonexistent"])
         log_output = log_sink.getvalue()
         assert "nonexistent" in log_output
     finally:

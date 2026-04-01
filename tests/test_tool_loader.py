@@ -21,7 +21,7 @@ def test_resolve_tool_functions_discovers_decorated(tmp_path):
             \"\"\"Echo back the message.\"\"\"
             return ToolResult(success=True, output=msg)
     """))
-    funcs = resolve_tool_functions(tmp_path, ["echo"])
+    funcs = resolve_tool_functions(tmp_path, "default", ["echo"])
     assert "echo" in funcs
     result = funcs["echo"](msg="hello")
     assert result.output == "hello"
@@ -41,7 +41,7 @@ def test_unified_gateway_with_evo_tools(tmp_path):
 
     config = ToolsConfig(disabled_builtins=["bash", "spawn"])
     gateway = MagicMock()
-    gw = UnifiedToolGateway(config, tmp_path, ["echo"], gateway)
+    gw = UnifiedToolGateway(config, tmp_path, "default", ["echo"], gateway)
     schemas = gw.schema()
     names = [schema["function"]["name"] for schema in schemas]
     assert names == ["echo"]

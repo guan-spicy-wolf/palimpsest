@@ -414,7 +414,7 @@ class TestRuntimeContextEndToEnd:
         # Actually, resolve_tool_functions scans {evo_root}/tools/*.py
         # For team-specific tools, we need to pass the parent of tools/ dir
         factorio_team_dir = evo_fixture_path / "teams" / "factorio"
-        tool_funcs = resolve_tool_functions(factorio_team_dir, ["factorio_tool"])
+        tool_funcs = resolve_tool_functions(factorio_team_dir, "factorio", ["factorio_tool"])
 
         assert "factorio_tool" in tool_funcs
         factorio_tool = tool_funcs["factorio_tool"]
@@ -584,6 +584,7 @@ class TestToolInjectionWithRuntimeContext:
             tool_gateway = UnifiedToolGateway(
                 config=config,
                 evo_root=evo_root,
+                team="factorio",
                 requested_evo_tools=[],
                 gateway=gateway,
             )
@@ -612,7 +613,7 @@ class TestToolInjectionWithRuntimeContext:
         # resolve_tool_functions expects path to directory containing tools/ subdir
         # For team-specific tools, pass the team directory (parent of tools/)
         factorio_team_dir = fixture_path / "teams" / "factorio"
-        tool_funcs = resolve_tool_functions(factorio_team_dir, ["factorio_tool"])
+        tool_funcs = resolve_tool_functions(factorio_team_dir, "factorio", ["factorio_tool"])
 
         assert "factorio_tool" in tool_funcs
 

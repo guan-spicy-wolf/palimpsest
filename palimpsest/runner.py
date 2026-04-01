@@ -166,7 +166,7 @@ def _run_job_from_spec(
         )
 
         # Stage 3+4: Interaction and publication
-        tools = _setup_tools(config, spec, evo_path, evo_sha, gateway)
+        tools = _setup_tools(config, spec, evo_path, evo_sha, gateway, config.team)
         result, git_ref = _stage_interaction_and_publication(
             job_id, context, workspace, config, spec, gateway, tools, llm,
             base_sha=base_sha,
@@ -235,11 +235,13 @@ def _setup_tools(
     evo_path: Path,
     evo_sha: str,
     gateway: EventGateway,
+    team: str,
 ) -> UnifiedToolGateway:
     """Create the unified tool gateway from builtin + evo providers."""
     return UnifiedToolGateway(
         config.tools,
         evo_path,
+        team,
         spec.tools,
         gateway,
         evo_sha=evo_sha,

@@ -36,7 +36,7 @@ def test_unified_dispatches_to_correct_tool(tmp_path):
         """,
     })
     config = ToolsConfig(disabled_builtins=["bash", "spawn"])
-    gw = UnifiedToolGateway(config, tmp_path, ["a", "b"], MagicMock())
+    gw = UnifiedToolGateway(config, tmp_path, "default", ["a", "b"], MagicMock())
 
     result = gw.execute("b", "call-1", {}, "/tmp")
     assert result.success
@@ -60,7 +60,7 @@ def test_unified_schema_merges_all(tmp_path):
         """,
     })
     config = ToolsConfig(disabled_builtins=["bash", "spawn"])
-    gw = UnifiedToolGateway(config, tmp_path, ["a", "b"], MagicMock())
+    gw = UnifiedToolGateway(config, tmp_path, "default", ["a", "b"], MagicMock())
 
     names = [s["function"]["name"] for s in gw.schema()]
     assert "a" in names
@@ -79,7 +79,7 @@ def test_unified_unknown_tool(tmp_path):
         """,
     })
     config = ToolsConfig(disabled_builtins=["bash", "spawn"])
-    gw = UnifiedToolGateway(config, tmp_path, ["a"], MagicMock())
+    gw = UnifiedToolGateway(config, tmp_path, "default", ["a"], MagicMock())
     result = gw.execute("nonexistent", "x", {}, "/tmp")
     assert not result.success
 

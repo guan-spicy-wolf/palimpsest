@@ -46,6 +46,7 @@ def test_tool_receives_runtime_context_via_injection():
         gateway = UnifiedToolGateway(
             config=config,
             evo_root=evo_root,
+            team="default",
             requested_evo_tools=[],
             gateway=event_gateway,
         )
@@ -98,6 +99,7 @@ def test_execute_accepts_runtime_context_parameter():
         gateway = UnifiedToolGateway(
             config=config,
             evo_root=evo_root,
+            team="default",
             requested_evo_tools=[],
             gateway=event_gateway,
         )
@@ -130,6 +132,7 @@ def test_tool_without_runtime_context_still_works():
         gateway = UnifiedToolGateway(
             config=config,
             evo_root=evo_root,
+            team="default",
             requested_evo_tools=[],
             gateway=event_gateway,
         )

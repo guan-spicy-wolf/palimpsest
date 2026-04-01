@@ -498,29 +498,51 @@ def _load_tool_functions(py_path: Path) -> dict[str, Callable]:
 
 def resolve_tool_functions(
     evo_root: str | Path,
+    team: str,
     requested: list[str],
 ) -> dict[str, Callable]:
-    """Scan evo/tools/*.py and return requested @tool functions."""
-    scan_dir = Path(evo_root) / "tools"
-    if not scan_dir.is_dir():
-        logger.warning(f"Tool directory not found: {scan_dir}")
-        return {}
-
+    """Scan evo/tools/ and evo/teams/<team>/tools/ for requested @tool functions.
+    
+    Per ADR-0011 D2: team-specific tools shadow global tools of the same name.
+    
+    Args:
+        evo_root: Root directory of the evo repository
+        team: Team name to resolve team-specific tools for
+        requested: List of tool names to resolve
+    
+    Returns:
+        Dict mapping tool names to their callable functions.
+        Team-specific tools override global tools with the same name.
+    """
+    evo_path = Path(evo_root)
     requested_set = set(requested)
     result: dict[str, Callable] = {}
-
-    for py_file in sorted(scan_dir.glob("*.py")):
-        if py_file.name.startswith("_"):
-            continue
-            
-        funcs = _load_tool_functions(py_file)
-        for name, func in funcs.items():
-            if name in requested_set:
-                result[name] = func
+    
+    # Scan global tools first
+    global_tools_dir = evo_path / "tools"
+    if global_tools_dir.is_dir():
+        for py_file in sorted(global_tools_dir.glob("*.py")):
+            if py_file.name.startswith("_"):
+                continue
+            funcs = _load_tool_functions(py_file)
+            for name, func in funcs.items():
+                if name in requested_set:
+                    result[name] = func
+    
+    # Scan team-specific tools (shadow global)
+    team_tools_dir = evo_path / "teams" / team / "tools"
+    if team_tools_dir.is_dir():
+        for py_file in sorted(team_tools_dir.glob("*.py")):
+            if py_file.name.startswith("_"):
+                continue
+            funcs = _load_tool_functions(py_file)
+            for name, func in funcs.items():
+                if name in requested_set:
+                    result[name] = func  # Shadows global
 
     missing = requested_set - set(result.keys())
     if missing:
-        logger.warning(f"Tools not found in {scan_dir}: {missing}")
+        logger.warning(f"Tools not found (team={team}): {missing}")
 
     return result
 
@@ -549,6 +571,7 @@ class UnifiedToolGateway:
         self,
         config: ToolsConfig,
         evo_root: Path,
+        team: str,
         requested_evo_tools: list[str],
         gateway: EventGateway,
         evo_sha: str = "",
@@ -581,9 +604,9 @@ class UnifiedToolGateway:
             self._functions["spawn"] = spawn
         if "create_pr" not in disabled and ("create_pr" in requested or not requested):
             self._functions["create_pr"] = create_pr
-        # Load evo tools
+        # Load evo tools (global + team-specific, team shadows global)
         requested_evo = [name for name in requested_evo_tools if name not in BUILTIN_TOOL_NAMES]
-        evo_funcs = resolve_tool_functions(evo_root, requested_evo)
+        evo_funcs = resolve_tool_functions(evo_root, team, requested_evo)
         
         dups = find_duplicate_tool_names(self._functions, evo_funcs)
         if dups:
