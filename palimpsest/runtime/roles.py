@@ -305,16 +305,49 @@ class RoleManager(RoleMetadataReader):
         raise ValueError(f"No @role-decorated function found in {py_path}")
 
 class TeamManager:
-    def __init__(self, evo_root: str | Path):
+    """Manages team definitions using directory-based membership (ADR-0011 D7).
+    
+    Per ADR-0011: Team membership is determined by directory location:
+    - evo/teams/<team>/roles/*.py are team-specific roles
+    - evo/roles/*.py are global roles (available to all teams)
+    """
+    def __init__(self, evo_root: str | Path, team: str = "default"):
         self._root = Path(evo_root)
-        self._roles = RoleManager(evo_root)
+        self._team = team
+        self._roles = RoleManager(evo_root, team=team)
 
     def list_teams(self) -> list[str]:
-        return sorted({team for meta in self._roles.list_definitions() for team in meta.teams})
+        """List all teams from directory structure and role metadata.
+        
+        Per ADR-0011 D7: Teams are discovered from:
+        1. evo/teams/<team>/roles/*.py directory structure
+        2. Role metadata teams field (for backwards compat)
+        """
+        # Discover from directory structure
+        teams_dir = self._root / "teams"
+        dir_teams = set()
+        if teams_dir.exists():
+            for team_dir in teams_dir.iterdir():
+                if team_dir.is_dir() and not team_dir.name.startswith("_"):
+                    roles_dir = team_dir / "roles"
+                    if roles_dir.exists() and any(roles_dir.glob("*.py")):
+                        dir_teams.add(team_dir.name)
+        
+        # Also include teams from role metadata (backwards compat)
+        meta_teams = {team for meta in self._roles.list_definitions() for team in meta.teams}
+        
+        return sorted(dir_teams | meta_teams)
 
     def resolve(self, name: str) -> TeamDefinition:
+        """Resolve a team definition by name.
+        
+        Per ADR-0011 D7: Uses directory-based membership via RoleManager.
+        Roles are discovered from evo/teams/<name>/roles/*.py + evo/roles/*.py.
+        """
         team_name = (name or "default").strip() or "default"
-        members = [meta for meta in self._roles.list_definitions() if team_name in meta.teams]
+        # Use RoleManager with the specific team for directory-based resolution
+        roles = RoleManager(self._root, team=team_name)
+        members = roles.list_definitions()
         if not members:
             raise FileNotFoundError(f"No roles found for team {team_name!r}")
 
