@@ -1,3 +1,4 @@
+from palimpsest.runtime.context import RuntimeContext
 from palimpsest.runtime.roles import (
     JobSpec,
     RoleManager,
@@ -15,6 +16,7 @@ from palimpsest.runtime.mock_llm import MockLLMGateway, LLMResponse as MockLLMRe
 from palimpsest.runtime.tools import UnifiedToolGateway, ToolResult
 
 __all__ = [
+    "RuntimeContext",
     "RoleManager",
     "JobSpec",
     "RoleMetadata",
