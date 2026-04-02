@@ -405,3 +405,36 @@ def test_run_job_materializes_requested_evo_sha(monkeypatch, tmp_path):
     assert captured["tools"] == ["v1"]
     assert captured["resolved_evo_sha"] == commit_v1
     assert captured["evo_path"] != evo
+
+
+def test_job_completed_exposes_empty_artifact_bindings_by_default(tmp_path):
+    """ADR-0013: JobCompletedData exposes artifact_bindings=[] by default.
+
+    This regression test verifies that the new artifact_bindings field
+    lands without changing today's git-first execution. When branch-based
+    publication succeeds, the event should have artifact_bindings == [].
+    """
+    emitter = RecordingEmitter()
+    config = JobConfig(job_id="job-adr0013", task="verify artifact bindings")
+    config.workspace.repo = "https://example.com/repo.git"
+    publication_mock = MagicMock(return_value="palimpsest/job-adr0013:abc123")
+    publication_mock.__publication_strategy__ = "branch"
+    publication_mock.__publication_branch_prefix__ = "palimpsest/job"
+    spec = _spec(publication_fn=publication_mock)
+
+    patches = _base_patches(emitter, tmp_path)
+    patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
+        return_value={"status": "complete", "summary": "ok", "messages": []}
+    )
+    patches["palimpsest.runner.git.Repo"] = MagicMock()
+
+    with _apply_patches(patches)[0]:
+        _run_job_from_spec(config, spec, tmp_path)
+
+    completed = [event for event in emitter.events if isinstance(event, JobCompletedData)]
+    assert completed, "Expected JobCompletedData event"
+    event = completed[-1]
+    # ADR-0013 contract: artifact_bindings defaults to empty list
+    assert event.artifact_bindings == [], f"Expected [], got {event.artifact_bindings}"
+    # git_ref remains unchanged (current behavior)
+    assert event.git_ref == "palimpsest/job-adr0013:abc123"
