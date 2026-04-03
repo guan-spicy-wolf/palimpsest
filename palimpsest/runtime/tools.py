@@ -1,4 +1,4 @@
-"""Tool gateway — unified tool execution with transparent event capture.
+"""Tool gateway - unified tool execution with transparent event capture.
 
 Part of the Runtime (skeleton). All tools (builtin and evo) flow through
 the same ``UnifiedToolGateway`` which wraps pure functions with transparent
@@ -55,7 +55,7 @@ def _function_to_schema(func: Callable) -> dict:
     """Generate JSON schema from function signature and docstring."""
     sig = inspect.signature(func)
     hints = get_type_hints(func)
-    
+
     doc = inspect.getdoc(func) or ""
     description = doc.split("\n\n")[0].strip() if doc else func.__name__
 
@@ -68,15 +68,15 @@ def _function_to_schema(func: Callable) -> dict:
     for name, param in sig.parameters.items():
         if name in injected_args:
             continue
-            
+
         py_type = hints.get(name, str)
         json_type = _python_type_to_json_type(py_type)
-        
+
         prop = {"type": json_type}
         # In a more advanced implementation we could parse the Args: section of docstring
         # for param descriptions. For now, we omit individual param descriptions.
         properties[name] = prop
-        
+
         if param.default == inspect.Parameter.empty:
             required.append(name)
 
@@ -116,7 +116,7 @@ def bash(command: str, workspace: str, config: ToolsConfig | None = None) -> Too
     else:
         timeout = 60
         output_limit = 4096
-        
+
     try:
         result = subprocess.run(
             command,
@@ -133,61 +133,57 @@ def bash(command: str, workspace: str, config: ToolsConfig | None = None) -> Too
     return ToolResult(success=result.returncode == 0, output=output[:output_limit])
 
 
-def _infer_spawn_job_defaults(workspace: str, evo_sha: str) -> dict[str, Any]:
-    defaults: dict[str, Any] = {
-        "repo": "",
-        "init_branch": "",
-        "role": "default",
-        "evo_sha": evo_sha,
-        "llm": {},
-        "workspace": {},
-        "publication": {},
-    }
-    try:
-        repo = git.Repo(workspace)
-    except Exception:
-        return defaults
-
-    if repo.remotes:
-        defaults["repo"] = repo.remotes[0].url
-    try:
-        defaults["init_branch"] = repo.active_branch.name
-    except Exception:
-        defaults["init_branch"] = ""
-    return defaults
-
 
 def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str) -> SpawnTaskData:
+    """Normalize spawn task to canonical SpawnTaskData.
+
+    Only canonical fields are accepted:
+    - goal (required)
+    - role (required)
+    - budget
+    - repo
+    - init_branch
+    - team
+    - params (role-internal flags only)
+    - eval_spec
+    - sha
+    """
     if not isinstance(task, dict):
         raise ValueError("Each spawn task must be an object")
 
-    prompt = str(task.get("prompt") or task.get("goal") or task.get("task") or "").strip()
-    if not prompt:
-        raise ValueError("Each spawn task requires a non-empty goal/prompt")
+    goal = str(task.get("goal") or "").strip()
+    if not goal:
+        raise ValueError("Each spawn task requires a non-empty goal")
 
-    defaults = _infer_spawn_job_defaults(workspace, evo_sha)
-
-    role = task.get("role") or task.get("role_fn")
-    if not role and task.get("role_file"):
-        role_file = str(task["role_file"])
-        role = role_file.removeprefix("roles/").removesuffix(".py")
+    role = str(task.get("role") or "").strip()
+    if not role:
+        raise ValueError("Each spawn task requires a role")
 
     budget = task.get("budget")
+    repo = task.get("repo")
+    init_branch = task.get("init_branch")
+    team = task.get("team")
+    sha = task.get("sha")
 
     eval_spec = task.get("eval_spec")
     normalized_eval_spec = EvalSpec.model_validate(eval_spec) if isinstance(eval_spec, dict) else None
+
+    # params contains only role-internal flags
+    params = {k: v for k, v in task.items() if k not in {
+        "goal", "role", "budget", "repo", "init_branch", "team", "sha", "eval_spec",
+        # Legacy keys that should not appear in params
+        "prompt", "task", "repo_url", "branch", "params", "role_fn", "role_file", "role_sha", "evo_sha",
+    }}
+
     return SpawnTaskData(
-        prompt=prompt,
-        goal=prompt,
-        role=str(role or defaults["role"]),
+        goal=goal,
+        role=role,
         budget=float(budget) if isinstance(budget, (int, float)) else 0.0,
-        sha=task.get("sha") or task.get("evo_sha") or task.get("role_sha") or defaults["evo_sha"] or None,
-        params={
-            **({"repo": task["repo"]} if task.get("repo") else ({ "repo": defaults["repo"] } if defaults["repo"] else {})),
-            **({"branch": task["branch"]} if task.get("branch") else {}),
-            **({"init_branch": task["init_branch"]} if task.get("init_branch") else {}),
-            **({k: v for k, v in task.items() if k not in {"prompt", "goal", "task", "role", "role_fn", "role_file", "budget", "eval_spec", "sha", "evo_sha", "role_sha"}}),
-        },
+        repo=str(repo or ""),
+        init_branch=str(init_branch or ""),
+        team=str(team or "").strip() or "default",
+        sha=sha or None,
+        params=params,
         eval_spec=normalized_eval_spec,
     )
 
@@ -206,9 +202,13 @@ _SPAWN_SCHEMA: dict = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "prompt": {
+                            "goal": {
                                 "type": "string",
                                 "description": "Concrete task description for the child agent.",
+                            },
+                            "team": {
+                                "type": "string",
+                                "description": "Team that owns this task.",
                             },
                             "role": {
                                 "type": "string",
@@ -243,7 +243,7 @@ _SPAWN_SCHEMA: dict = {
                                 },
                             },
                         },
-                        "required": ["prompt", "role"],
+                        "required": ["goal", "role"],
                     },
                 },
                 "wait_for": {
@@ -502,14 +502,14 @@ def resolve_tool_functions(
     requested: list[str],
 ) -> dict[str, Callable]:
     """Scan evo/tools/ and evo/teams/<team>/tools/ for requested @tool functions.
-    
+
     Per ADR-0011 D2: team-specific tools shadow global tools of the same name.
-    
+
     Args:
         evo_root: Root directory of the evo repository
         team: Team name to resolve team-specific tools for
         requested: List of tool names to resolve
-    
+
     Returns:
         Dict mapping tool names to their callable functions.
         Team-specific tools override global tools with the same name.
@@ -517,7 +517,7 @@ def resolve_tool_functions(
     evo_path = Path(evo_root)
     requested_set = set(requested)
     result: dict[str, Callable] = {}
-    
+
     # Scan global tools first
     global_tools_dir = evo_path / "tools"
     if global_tools_dir.is_dir():
@@ -528,7 +528,7 @@ def resolve_tool_functions(
             for name, func in funcs.items():
                 if name in requested_set:
                     result[name] = func
-    
+
     # Scan team-specific tools (shadow global)
     team_tools_dir = evo_path / "teams" / team / "tools"
     if team_tools_dir.is_dir():
@@ -582,8 +582,8 @@ class UnifiedToolGateway:
         self._evo_root = evo_root
         self._evo_sha = evo_sha
         self._tool_timeout_seconds = tool_timeout_seconds
-        
-        # Load builtins — only include builtins that appear in the role's
+
+        # Load builtins - only include builtins that appear in the role's
         # requested tool list (or all if no evo tools are requested, for
         # backwards compatibility).
         disabled = set(config.disabled_builtins)
@@ -607,13 +607,13 @@ class UnifiedToolGateway:
         # Load evo tools (global + team-specific, team shadows global)
         requested_evo = [name for name in requested_evo_tools if name not in BUILTIN_TOOL_NAMES]
         evo_funcs = resolve_tool_functions(evo_root, team, requested_evo)
-        
+
         dups = find_duplicate_tool_names(self._functions, evo_funcs)
         if dups:
             raise ValueError("Duplicate tool names configured: " + ", ".join(dups))
-            
+
         self._functions.update(evo_funcs)
-        
+
         # Pre-build schemas
         self._schemas = [func.__tool_schema__ for func in self._functions.values()]
 
@@ -657,11 +657,11 @@ class UnifiedToolGateway:
                 kwargs["runtime_context"] = runtime_context
 
             result = func(**kwargs)
-            
+
             # Allow pure functions to return strings directly instead of ToolResult
             if not isinstance(result, ToolResult):
                 result = ToolResult(success=True, output=str(result))
-                
+
         except Exception as exc:
             logger.error(f"Tool {name} raised: {exc}")
             result = ToolResult(success=False, output=f"Tool error: {exc}")

@@ -1,5 +1,21 @@
 from __future__ import annotations
 
+# ---------------------------------------------------------------------------
+# Architecture note: Why idle detection instead of a task_complete tool?
+#
+# An earlier design had an explicit `task_complete` tool that agents called
+# to signal they were done. This was removed (ADR-0002) because:
+#
+# 1. It conflated Task and Job semantics — an agent saying "I'm done" is
+#    a Job-level observation, but callers read it as a Task-level statement.
+# 2. Model self-reporting is unreliable — agents frequently claim completion
+#    prematurely or forget to call the tool entirely.
+# 3. Idle detection (two consecutive no-tool-call LLM responses) moves the
+#    exit decision to the runtime, which observes behavior rather than
+#    trusting self-assessment. The first idle response becomes the candidate
+#    summary; a confirmation prompt gives the agent one chance to resume.
+# ---------------------------------------------------------------------------
+
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 

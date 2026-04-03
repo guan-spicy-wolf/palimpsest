@@ -3,10 +3,21 @@
 The runner is part of the Runtime (skeleton) — it is immutable and not
 subject to Agent self-evolution.  It orchestrates:
 
-  1. Workspace setup (clone repo, create job branch)
-  2. Context building (from the resolved JobSpec)
-  3. Interaction loop (LLM calls + tool execution)
-  4. Publication (git commit + push + completion event)
+  1. Preparation  (workspace setup, artifact materialization, resource init)
+  2. Context      (system prompt, goal, tools, event-derived context)
+  3. Interaction  (LLM calls + tool execution loop)
+  4. Publication   (artifact store + optional git push + completion event)
+
+Architecture note: Why are the stages fixed and not event-driven?
+During the runtime redesign exploration (2026-04), an alternative was
+considered where stages could be selected dynamically via an event-driven
+kernel. This was rejected because the four stages form a causal dependency
+chain: context cannot be built without a workspace, interaction cannot
+start without context, publication cannot happen without interaction
+output. An event-driven selector that always walks 1→2→3→4 adds overhead
+without flexibility. Variation between task types belongs in stage
+*implementations* (different preparation_fn, different publication_fn),
+not in stage *topology*.
 
 Stage-level events (transitions, job-started, cleanup issues) are emitted
 by the stage functions themselves.  The runner only emits job-lifecycle
@@ -110,8 +121,7 @@ def _run_job_from_spec(
     llm = _setup_llm(config, gateway)
     cost_tracking_degraded = llm.cost_tracking_degraded()
     try:
-        # Per ADR-0007: role_params contains only role-internal flags
-        # goal is config.task, passed explicitly to preparation_fn and context_fn
+        # goal is config.goal, passed explicitly to preparation_fn and context_fn
         role_params = dict(config.role_params or {})
         branch_prefix = str(
             role_params.get("branch_prefix")
@@ -119,10 +129,8 @@ def _run_job_from_spec(
         )
 
         # Stage 1: Preparation (emits stage-transition + job-started internally)
-        # Per ADR-0009: preparation_fn is the canonical name (workspace_fn is alias)
-        # ADR-0011: pass runtime_context if preparation_fn accepts it
         prep_params = {
-            "goal": config.task,
+            "goal": config.goal,
             "repo": config.workspace.repo,
             "init_branch": config.workspace.init_branch,
             **role_params,
@@ -136,7 +144,7 @@ def _run_job_from_spec(
             workspace_cfg,
             branch_prefix,
             task_id=config.task_id or job_id,
-            goal=config.task,
+            goal=config.goal,
             gateway=gateway,
             evo_sha=evo_sha,
             cost_tracking_degraded=cost_tracking_degraded,
@@ -156,13 +164,13 @@ def _run_job_from_spec(
         context_spec = spec.context_fn(
             workspace=workspace,
             job_id=job_id,
-            goal=config.task,  # explicit goal parameter
+            goal=config.goal,
             job_config=config,
             evo_root=str(evo_path),
             **role_params,
         )
         context = build_context(
-            job_id, workspace, config.task, context_spec, config, gateway, evo_root=evo_path,
+            job_id, workspace, config.goal, context_spec, config, gateway, evo_root=evo_path,
         )
 
         # Stage 3+4: Interaction and publication
@@ -313,7 +321,7 @@ def _stage_interaction_and_publication(
                 workspace_path=workspace,
                 job_id=job_id,
                 task_id=config.task_id or job_id,
-                goal=config.task,
+                goal=config.goal,
                 git_token_env=config.workspace.git_token_env,
                 base_sha=base_sha,
                 **publication_params,
