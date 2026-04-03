@@ -138,8 +138,8 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
     """Normalize spawn task to canonical SpawnTaskData.
 
     Only canonical fields are accepted:
-    - goal (required)
-    - role (required)
+    - goal (required, min_length=1)
+    - role (required, min_length=1)
     - budget
     - repo
     - init_branch
@@ -160,20 +160,24 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
     if found:
         raise ValueError(f"Legacy field(s) not allowed: {found}. Use canonical fields (goal, repo, init_branch, role).")
 
-    goal = str(task.get("goal") or "").strip()
-    if not goal:
-        raise ValueError("Each spawn task requires a non-empty goal")
+    goal = task.get("goal")
+    role = task.get("role")
 
-    role = str(task.get("role") or "").strip()
-    if not role:
-        raise ValueError("Each spawn task requires a role")
+    # Validate required fields
+    if goal is None or (isinstance(goal, str) and not goal.strip()):
+        raise ValueError("Each spawn task requires a non-empty goal")
+    if role is None or (isinstance(role, str) and not role.strip()):
+        raise ValueError("Each spawn task requires a non-empty role")
+
+    goal = str(goal).strip()
+    role = str(role).strip()
 
     budget = task.get("budget")
     repo = task.get("repo")
     init_branch = task.get("init_branch")
-    team = task.get("team")  # Keep as-is; empty means inherit from parent
+    team = task.get("team")
     sha = task.get("sha")
-    params = task.get("params")  # Explicit params field
+    params = task.get("params")
 
     eval_spec = task.get("eval_spec")
     normalized_eval_spec = EvalSpec.model_validate(eval_spec) if isinstance(eval_spec, dict) else None
@@ -184,7 +188,7 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
     if not isinstance(params, dict):
         raise ValueError("params must be a dict of role-internal flags")
     # Validate params doesn't contain task semantics
-    forbidden_params = {"goal", "budget", "repo", "repo_url", "branch", "init_branch", "task", "prompt"}
+    forbidden_params = {"budget", "repo", "repo_url", "branch", "init_branch", "task", "prompt"}
     params_violations = forbidden_params & set(params.keys())
     if params_violations:
         raise ValueError(f"params contains forbidden task semantics: {params_violations}")
@@ -216,7 +220,7 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
         budget=float(budget) if isinstance(budget, (int, float)) else 0.0,
         repo=str(repo or ""),
         init_branch=str(init_branch or ""),
-        team=str(team or "").strip(),  # Empty string means inherit; don't default here
+        team=str(team or "").strip(),
         sha=sha or None,
         params=params,
         eval_spec=normalized_eval_spec,
