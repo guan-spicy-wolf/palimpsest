@@ -78,12 +78,31 @@ def run_preparation(
                 b64_auth = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
                 clone_kwargs["c"] = f"http.extraHeader=AUTHORIZATION: basic {b64_auth}"
 
-        repo = git.Repo.clone_from(
-            config.repo,
-            workspace_path,
-            allow_unsafe_options=True,
-            **clone_kwargs,
-        )
+        try:
+            repo = git.Repo.clone_from(
+                config.repo,
+                workspace_path,
+                allow_unsafe_options=True,
+                **clone_kwargs,
+            )
+        except Exception as exc:
+            # ADR-0010: emit preparation_failure observation
+            if gateway:
+                from yoitsu_contracts.observation import (
+                    ObservationPreparationFailureData,
+                    OBSERVATION_PREPARATION_FAILURE,
+                )
+                gateway.emit(
+                    OBSERVATION_PREPARATION_FAILURE,
+                    ObservationPreparationFailureData(
+                        task_id=task_id or job_id,
+                        job_id=job_id,
+                        role="",  # role not available in preparation stage
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                    ).model_dump(),
+                )
+            raise
     else:
         logger.info("Using repoless scratch workspace")
         repo = None
