@@ -164,7 +164,7 @@ class TestTeamRuntimeConfigIntegration:
         spec = builder.build(
             job_id="factorio-job-001",
             source_event_id="evt-001",
-            task="Build copper wire factory",
+            goal="Build copper wire factory",
             role="worker",
             team="factorio",
             repo="",  # Factorio doesn't need git repo
@@ -212,7 +212,7 @@ class TestTeamRuntimeConfigIntegration:
         spec = builder.build(
             job_id="default-job-001",
             source_event_id="evt-002",
-            task="Implement feature X",
+            goal="Implement feature X",
             role="worker",
             team="default",
             repo="https://github.com/org/repo.git",
@@ -251,7 +251,7 @@ class TestTeamRuntimeConfigIntegration:
         spec = builder.build(
             job_id="unknown-team-job",
             source_event_id="evt-003",
-            task="Task for undefined team",
+            goal="Task for undefined team",
             role="worker",
             team="undefined-team",
             repo="",
@@ -509,7 +509,7 @@ class TestRuntimeContextEndToEnd:
             tools=["bash"],
         )
 
-        config = JobConfig(job_id="full-pipeline-test", task="test task")
+        config = JobConfig(job_id="full-pipeline-test", goal="test task")
         config.team = "factorio"
 
         patches = {
@@ -707,7 +707,7 @@ class TestCrossComponentIntegration:
         spec = builder.build(
             job_id="job-001",
             source_event_id="evt-001",
-            task="task",
+            goal="task",
             role="worker",
             team="factorio",
             repo="",
