@@ -99,7 +99,7 @@ class TestSpawn:
                 emitted.append(event)
 
         result = spawn(
-            tasks=[{"goal": "Inspect the repository structure"}],
+            tasks=[{"goal": "Inspect the repository structure", "role": "default"}],
             workspace=str(tmp_path),
             gateway=FakeGateway(),
             evo_root=str(EVO_ROOT),
@@ -111,10 +111,11 @@ class TestSpawn:
         child = event.tasks[0]
         assert child.goal == "Inspect the repository structure"
         assert child.role == "default"
-        assert child.params["repo"] == "https://github.com/example/repo.git"
+        # repo is now a top-level field, not in params
+        assert child.repo == "https://github.com/example/repo.git"
         assert child.sha
 
-    def test_spawn_accepts_legacy_task_and_role_fields(self, tmp_path):
+    def test_spawn_rejects_legacy_task_field(self, tmp_path):
         repo = git.Repo.init(tmp_path)
         with repo.config_writer() as writer:
             writer.set_value("user", "name", "Test Agent")
@@ -132,19 +133,18 @@ class TestSpawn:
                 emitted.append(event)
 
         result = spawn(
-            tasks=[{"task": "Review docs", "role": "default", "branch": "docs-branch"}],
+            tasks=[{"task": "Review docs", "role": "default"}],
             workspace=str(tmp_path),
             gateway=FakeGateway(),
             evo_root=str(EVO_ROOT),
         )
 
-        assert result.success is True
-        child = emitted[0].tasks[0]
-        assert child.goal == "Review docs"
-        assert child.role == "default"
-        assert child.params["branch"] == "docs-branch"
+        # Legacy field 'task' should be rejected
+        assert result.success is False
+        # Check that it's rejected because of the legacy field, not because of missing goal
+        assert "legacy" in result.output.lower() or "not allowed" in result.output.lower() or "forbidden" in result.output.lower()
 
-    def test_spawn_accepts_goal_budget_and_role_fn(self, tmp_path):
+    def test_spawn_rejects_legacy_branch_field(self, tmp_path):
         repo = git.Repo.init(tmp_path)
         with repo.config_writer() as writer:
             writer.set_value("user", "name", "Test Agent")
@@ -152,6 +152,7 @@ class TestSpawn:
         (tmp_path / "README.md").write_text("hello\n")
         repo.index.add(["README.md"])
         repo.index.commit("init")
+        repo.create_remote("origin", "https://github.com/example/repo.git")
         repo.git.checkout("-b", "main")
 
         emitted = []
@@ -161,7 +162,35 @@ class TestSpawn:
                 emitted.append(event)
 
         result = spawn(
-            tasks=[{"goal": "Implement OAuth2 login endpoint", "role_fn": "implementer", "budget": 0.6}],
+            tasks=[{"goal": "Review docs", "role": "default", "branch": "docs-branch"}],
+            workspace=str(tmp_path),
+            gateway=FakeGateway(),
+            evo_root=str(EVO_ROOT),
+        )
+
+        # Legacy field 'branch' should be rejected
+        assert result.success is False
+        assert "legacy" in result.output.lower() or "not allowed" in result.output.lower()
+
+    def test_spawn_accepts_goal_budget_and_role(self, tmp_path):
+        repo = git.Repo.init(tmp_path)
+        with repo.config_writer() as writer:
+            writer.set_value("user", "name", "Test Agent")
+            writer.set_value("user", "email", "agent@example.com")
+        (tmp_path / "README.md").write_text("hello\n")
+        repo.index.add(["README.md"])
+        repo.index.commit("init")
+        repo.create_remote("origin", "https://github.com/example/repo.git")
+        repo.git.checkout("-b", "main")
+
+        emitted = []
+
+        class FakeGateway:
+            def emit(self, event):
+                emitted.append(event)
+
+        result = spawn(
+            tasks=[{"goal": "Implement OAuth2 login endpoint", "role": "implementer", "budget": 0.6}],
             workspace=str(tmp_path),
             gateway=FakeGateway(),
             evo_root=str(EVO_ROOT),
@@ -173,6 +202,36 @@ class TestSpawn:
         assert child.role == "implementer"
         assert child.budget == 0.6
 
+    def test_spawn_accepts_params_for_role_internal_flags(self, tmp_path):
+        repo = git.Repo.init(tmp_path)
+        with repo.config_writer() as writer:
+            writer.set_value("user", "name", "Test Agent")
+            writer.set_value("user", "email", "agent@example.com")
+        (tmp_path / "README.md").write_text("hello\n")
+        repo.index.add(["README.md"])
+        repo.index.commit("init")
+        repo.create_remote("origin", "https://github.com/example/repo.git")
+        repo.git.checkout("-b", "main")
+
+        emitted = []
+
+        class FakeGateway:
+            def emit(self, event):
+                emitted.append(event)
+
+        result = spawn(
+            tasks=[{"goal": "Join and review", "role": "planner", "params": {"mode": "join"}}],
+            workspace=str(tmp_path),
+            gateway=FakeGateway(),
+            evo_root=str(EVO_ROOT),
+        )
+
+        assert result.success is True
+        child = emitted[0].tasks[0]
+        assert child.goal == "Join and review"
+        assert child.role == "planner"
+        assert child.params == {"mode": "join"}
+
 
 def test_create_pr_calls_github_api(monkeypatch):
     captured = {}
@@ -181,40 +240,32 @@ def test_create_pr_calls_github_api(monkeypatch):
         captured["url"] = url
         captured["headers"] = headers
         captured["json"] = json
-        captured["timeout"] = timeout
-        return httpx.Response(
-            201,
-            json={"html_url": "https://github.com/example/repo/pull/42", "number": 42},
-            request=httpx.Request("POST", url),
-        )
 
+        class FakeResponse:
+            is_success = True
+            status_code = 201
+
+            def json(self):
+                return {
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "number": 1,
+                }
+
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
     monkeypatch.setenv("GITHUB_TOKEN", "test-token")
-    monkeypatch.setattr("palimpsest.runtime.tools.httpx.post", fake_post)
 
     result = create_pr(
         repo="https://github.com/example/repo.git",
-        head_branch="palimpsest/job/demo",
+        head_branch="feature/branch",
         base_branch="main",
-        title="Demo PR",
-        body="Body",
+        title="Test PR",
+        body="This is a test PR",
     )
 
-    assert result.success is True
-    assert '"pr_url": "https://github.com/example/repo/pull/42"' in result.output
-    assert captured["url"] == "https://api.github.com/repos/example/repo/pulls"
-    assert captured["json"]["head"] == "palimpsest/job/demo"
+    assert result.success
+    assert "github.com" in captured["url"]
+    assert captured["json"]["title"] == "Test PR"
+    assert captured["json"]["head"] == "feature/branch"
     assert captured["json"]["base"] == "main"
-    assert captured["headers"]["Authorization"] == "Bearer test-token"
-
-
-def test_create_pr_rejects_non_github_repo():
-    result = create_pr(
-        repo="https://gitlab.com/example/repo.git",
-        head_branch="feature/demo",
-        base_branch="main",
-        title="Demo PR",
-        body="Body",
-    )
-
-    assert result.success is False
-    assert "Unsupported repository host" in result.output

@@ -147,9 +147,18 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
     - params (role-internal flags only)
     - eval_spec
     - sha
+
+    Legacy fields (prompt, task, repo_url, branch, params.repo, etc.) are rejected.
+    repo defaults to the workspace's origin URL if not specified.
     """
     if not isinstance(task, dict):
         raise ValueError("Each spawn task must be an object")
+
+    # Check for forbidden legacy keys first
+    forbidden = {"prompt", "task", "repo_url", "branch", "role_fn", "role_file", "role_sha", "evo_sha"}
+    found = forbidden & set(task.keys())
+    if found:
+        raise ValueError(f"Legacy field(s) not allowed: {found}. Use canonical fields (goal, repo, init_branch, role).")
 
     goal = str(task.get("goal") or "").strip()
     if not goal:
@@ -162,18 +171,44 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
     budget = task.get("budget")
     repo = task.get("repo")
     init_branch = task.get("init_branch")
-    team = task.get("team")
+    team = task.get("team")  # Keep as-is; empty means inherit from parent
     sha = task.get("sha")
+    params = task.get("params")  # Explicit params field
 
     eval_spec = task.get("eval_spec")
     normalized_eval_spec = EvalSpec.model_validate(eval_spec) if isinstance(eval_spec, dict) else None
 
-    # params contains only role-internal flags
-    params = {k: v for k, v in task.items() if k not in {
-        "goal", "role", "budget", "repo", "init_branch", "team", "sha", "eval_spec",
-        # Legacy keys that should not appear in params
-        "prompt", "task", "repo_url", "branch", "params", "role_fn", "role_file", "role_sha", "evo_sha",
-    }}
+    # params must be a dict of role-internal flags only
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        raise ValueError("params must be a dict of role-internal flags")
+    # Validate params doesn't contain task semantics
+    forbidden_params = {"goal", "budget", "repo", "repo_url", "branch", "init_branch", "task", "prompt"}
+    params_violations = forbidden_params & set(params.keys())
+    if params_violations:
+        raise ValueError(f"params contains forbidden task semantics: {params_violations}")
+
+    # Infer repo from workspace if not provided
+    if not repo:
+        try:
+            ws_repo = git.Repo(workspace)
+            if ws_repo.remotes:
+                repo = ws_repo.remotes[0].url
+        except Exception:
+            pass
+
+    # Infer init_branch from workspace if not provided
+    if not init_branch:
+        try:
+            ws_repo = git.Repo(workspace)
+            init_branch = ws_repo.active_branch.name
+        except Exception:
+            pass
+
+    # Infer sha from evo_sha if not provided
+    if not sha and evo_sha:
+        sha = evo_sha
 
     return SpawnTaskData(
         goal=goal,
@@ -181,7 +216,7 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
         budget=float(budget) if isinstance(budget, (int, float)) else 0.0,
         repo=str(repo or ""),
         init_branch=str(init_branch or ""),
-        team=str(team or "").strip() or "default",
+        team=str(team or "").strip(),  # Empty string means inherit; don't default here
         sha=sha or None,
         params=params,
         eval_spec=normalized_eval_spec,
@@ -206,10 +241,6 @@ _SPAWN_SCHEMA: dict = {
                                 "type": "string",
                                 "description": "Concrete task description for the child agent.",
                             },
-                            "team": {
-                                "type": "string",
-                                "description": "Team that owns this task.",
-                            },
                             "role": {
                                 "type": "string",
                                 "description": "Team role to assign (e.g. 'implementer', 'reviewer').",
@@ -225,6 +256,18 @@ _SPAWN_SCHEMA: dict = {
                             "init_branch": {
                                 "type": "string",
                                 "description": "Branch to clone from.",
+                            },
+                            "team": {
+                                "type": "string",
+                                "description": "Team that owns this task. Omit to inherit from parent.",
+                            },
+                            "sha": {
+                                "type": "string",
+                                "description": "Git SHA to pin evo version.",
+                            },
+                            "params": {
+                                "type": "object",
+                                "description": "Role-internal behavior flags (e.g., mode=join). Must not contain task semantics.",
                             },
                             "eval_spec": {
                                 "type": "object",
