@@ -248,7 +248,13 @@ def test_create_pr_calls_github_api(monkeypatch):
             def json(self):
                 return {
                     "html_url": "https://github.com/example/repo/pull/1",
+                    "url": "https://api.github.com/repos/example/repo/pulls/1",
                     "number": 1,
+                    "title": "Test PR",
+                    "body": "This is a test PR",
+                    "head": {"ref": "feature/branch"},
+                    "base": {"ref": "main"},
+                    "state": "open",
                 }
 
         return FakeResponse()

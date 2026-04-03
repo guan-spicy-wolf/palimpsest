@@ -358,46 +358,6 @@ def spawn(
 # items definitions for the tasks array, so models know the expected shape.
 spawn.__tool_schema__ = _SPAWN_SCHEMA
 
-
-def _github_repo_slug(repo: str) -> tuple[str, str]:
-    text = (repo or "").strip()
-    if not text:
-        raise ValueError("repo is required")
-
-    path = ""
-    if text.startswith("git@github.com:"):
-        path = text.split(":", 1)[1]
-    else:
-        parsed = urlparse(text)
-        host = (parsed.hostname or "").lower()
-        if host != "github.com":
-            raise ValueError(f"Unsupported repository host: {host or text}")
-        path = parsed.path.lstrip("/")
-
-    path = path.removesuffix(".git").strip("/")
-    match = re.fullmatch(r"([^/]+)/([^/]+)", path)
-    if not match:
-        raise ValueError(f"Could not parse GitHub repository slug from: {repo}")
-    return match.group(1), match.group(2)
-
-
-def _github_token(git_token_env: str = "") -> tuple[str, str]:
-    candidates = []
-    if git_token_env:
-        candidates.append(git_token_env)
-    candidates.extend(["GITHUB_TOKEN", "GH_TOKEN"])
-
-    seen: set[str] = set()
-    for name in candidates:
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        value = os.environ.get(name, "").strip()
-        if value:
-            return value, name
-    raise ValueError("No GitHub token found. Set git_token_env, GITHUB_TOKEN, or GH_TOKEN.")
-
-
 _CREATE_PR_SCHEMA: dict = {
     "type": "function",
     "function": {
@@ -449,7 +409,12 @@ def create_pr(
     body: str,
     git_token_env: str = "",
 ) -> ToolResult:
-    """Create a GitHub pull request from an existing branch."""
+    """Create a GitHub pull request from an existing branch.
+
+    Uses the unified GitHubClient for consistent API access.
+    """
+    from .github_client import GitHubClient, GitHubError
+
     head_branch = (head_branch or "").strip()
     base_branch = (base_branch or "").strip()
     title = (title or "").strip()
@@ -461,57 +426,35 @@ def create_pr(
         return ToolResult(success=False, output="title is required")
 
     try:
-        owner, repo_name = _github_repo_slug(repo)
-        token, token_source = _github_token(git_token_env)
+        client = GitHubClient(token_env=git_token_env or "GITHUB_TOKEN")
+        owner, repo_name = client.parse_repo_slug(repo)
     except ValueError as exc:
         return ToolResult(success=False, output=str(exc))
 
     try:
-        response = httpx.post(
-            f"https://api.github.com/repos/{owner}/{repo_name}/pulls",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            json={
-                "title": title,
-                "body": body,
-                "head": head_branch,
-                "base": base_branch,
-            },
-            timeout=30.0,
+        pr = client.create_pr(
+            owner=owner,
+            repo=repo_name,
+            head_branch=head_branch,
+            base_branch=base_branch,
+            title=title,
+            body=body,
         )
-    except httpx.HTTPError as exc:
-        return ToolResult(success=False, output=f"GitHub PR create failed: {exc}")
-
-    if response.is_success:
-        payload = response.json()
         return ToolResult(
             success=True,
             output=json.dumps(
                 {
-                    "pr_url": payload.get("html_url", ""),
-                    "number": payload.get("number"),
+                    "pr_url": pr.html_url,
+                    "number": pr.number,
                     "repo": f"{owner}/{repo_name}",
                     "head_branch": head_branch,
                     "base_branch": base_branch,
-                    "token_env": token_source,
                 },
                 ensure_ascii=True,
             ),
         )
-
-    detail = ""
-    try:
-        payload = response.json()
-        detail = str(payload.get("message") or payload)
-    except Exception:
-        detail = response.text.strip()
-    return ToolResult(
-        success=False,
-        output=f"GitHub PR create failed ({response.status_code}): {detail or 'unknown error'}",
-    )
+    except GitHubError as exc:
+        return ToolResult(success=False, output=str(exc))
 
 
 create_pr.__tool_schema__ = _CREATE_PR_SCHEMA
