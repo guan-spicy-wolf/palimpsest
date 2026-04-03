@@ -23,7 +23,7 @@ palimpsest = "palimpsest.cli:main"
 package = true
 
 [tool.uv.sources]
-yoitsu-contracts = { path = "../yoitsu-contracts" }
+yoitsu-contracts = { path = "../yoitsu-contracts", editable = true }
 
 [tool.setuptools.packages.find]
 include = ["palimpsest*"]

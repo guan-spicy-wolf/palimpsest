@@ -327,7 +327,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.14" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "yoitsu-contracts", directory = "../yoitsu-contracts" },
+    { name = "yoitsu-contracts", editable = "../yoitsu-contracts" },
 ]
 
 [package.metadata.requires-dev]
@@ -619,7 +619,7 @@ wheels = [
 [[package]]
 name = "yoitsu-contracts"
 version = "0.1.0"
-source = { directory = "../yoitsu-contracts" }
+source = { editable = "../yoitsu-contracts" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
