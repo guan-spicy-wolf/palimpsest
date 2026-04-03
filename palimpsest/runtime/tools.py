@@ -188,7 +188,7 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
     if not isinstance(params, dict):
         raise ValueError("params must be a dict of role-internal flags")
     # Validate params doesn't contain task semantics
-    forbidden_params = {"budget", "repo", "repo_url", "branch", "init_branch", "task", "prompt"}
+    forbidden_params = {"goal", "budget", "repo", "repo_url", "branch", "init_branch", "task", "prompt"}
     params_violations = forbidden_params & set(params.keys())
     if params_violations:
         raise ValueError(f"params contains forbidden task semantics: {params_violations}")
