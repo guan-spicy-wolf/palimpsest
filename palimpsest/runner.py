@@ -191,6 +191,7 @@ def _run_job_from_spec(
                 budget_dim=str(result.get("budget_dim", "") or ""),
                 cost_tracking_degraded=cost_tracking_degraded,
                 cost=llm.total_cost,  # ADR-0010: actual cost for budget_variance
+                artifact_bindings=result.get("artifact_bindings", []),  # ADR-0013
             )
         )
         logger.info(f"Job {job_id} completed")
@@ -316,7 +317,7 @@ def _stage_interaction_and_publication(
             pub_sig = inspect.signature(spec.publication_fn)
             if "runtime_context" in pub_sig.parameters and runtime_context is not None:
                 publication_params["runtime_context"] = runtime_context
-            git_ref = spec.publication_fn(
+            git_ref, artifact_bindings = spec.publication_fn(
                 result=result,
                 workspace_path=workspace,
                 job_id=job_id,
@@ -326,6 +327,7 @@ def _stage_interaction_and_publication(
                 base_sha=base_sha,
                 **publication_params,
             )
+            result["artifact_bindings"] = artifact_bindings or []
             return result, git_ref
         except PublicationGuardrailViolation as exc:
             can_retry = publication_recovery_attempts < max_recovery_attempts

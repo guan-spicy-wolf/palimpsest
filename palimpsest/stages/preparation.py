@@ -17,6 +17,8 @@ from loguru import logger
 from palimpsest.config import WorkspaceConfig, PreparationConfig
 from palimpsest.events import JobStartedData
 from palimpsest.runtime.event_gateway import EventGateway
+from yoitsu_contracts.artifact import ArtifactBinding
+from yoitsu_contracts.local_fs_backend import LocalFSBackend
 
 _DEFAULT_GIT_USER_NAME = "Palimpsest Agent"
 _DEFAULT_GIT_USER_EMAIL = "palimpsest@local.invalid"
@@ -60,6 +62,8 @@ def run_preparation(
     workspace_path = tempfile.mkdtemp(prefix="palimpsest-")
     logger.info(f"Created workspace: {workspace_path}")
 
+    # ADR-0013: Clone first if repo exists, then materialize artifacts
+    # This avoids "destination path already exists" when both repo and artifacts are set
     if config.repo:
         logger.info(f"Cloning {config.repo} branch={config.init_branch}")
         clone_kwargs = {
@@ -106,6 +110,10 @@ def run_preparation(
     else:
         logger.info("Using repoless scratch workspace")
         repo = None
+
+    # ADR-0013: Materialize input artifacts after clone (or for repoless workspace)
+    if hasattr(config, 'input_artifacts') and config.input_artifacts:
+        _materialize_input_artifacts(config.input_artifacts, workspace_path)
     
     if repo is not None and config.repo:
         _ensure_repo_identity(repo)
@@ -167,3 +175,38 @@ def _ensure_repo_identity(repo: git.Repo) -> None:
             writer.set_value("user", "name", user_name)
         if not has_email:
             writer.set_value("user", "email", user_email)
+
+
+def _materialize_input_artifacts(
+    artifacts: list[ArtifactBinding],
+    workspace_path: str,
+) -> None:
+    """Materialize input artifacts into workspace (ADR-0013).
+
+    Args:
+        artifacts: List of ArtifactBinding to materialize.
+        workspace_path: Target workspace directory.
+    """
+    # Determine artifact store root from environment or default
+    store_root = Path(os.environ.get("PALIMPSEST_ARTIFACT_STORE", "~/.cache/palimpsest/artifacts"))
+    store_root = store_root.expanduser()
+
+    backend = LocalFSBackend(store_root)
+
+    for binding in artifacts:
+        ref = binding.ref
+        target_path = Path(workspace_path) / binding.path if binding.path else Path(workspace_path)
+
+        if ref.object_kind == "tree":
+            # Materialize directory tree
+            logger.info(f"Materializing tree artifact {ref.digest} to {target_path}")
+            target_path.mkdir(parents=True, exist_ok=True)
+            backend.materialize_tree(ref, target_path)
+        elif ref.object_kind == "blob":
+            # Write single file
+            logger.info(f"Materializing blob artifact {ref.digest} to {target_path}")
+            data = backend.retrieve_blob(ref)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_bytes(data)
+        else:
+            logger.warning(f"Unknown artifact kind: {ref.object_kind}, skipping")

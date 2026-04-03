@@ -27,6 +27,7 @@ from palimpsest.config import ToolsConfig
 from palimpsest.events import EvalSpec, SpawnRequestData, SpawnTaskData, ToolExecData, ToolResultData
 from palimpsest.runtime.context import RuntimeContext
 from palimpsest.runtime.event_gateway import EventGateway
+from yoitsu_contracts.artifact import ArtifactBinding
 
 BUILTIN_TOOL_NAMES = {"bash", "spawn", "create_pr"}
 
@@ -182,6 +183,12 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
     eval_spec = task.get("eval_spec")
     normalized_eval_spec = EvalSpec.model_validate(eval_spec) if isinstance(eval_spec, dict) else None
 
+    # ADR-0013: input_artifacts
+    input_artifacts_data = task.get("input_artifacts", [])
+    input_artifacts = [
+        ArtifactBinding.model_validate(b) for b in input_artifacts_data
+    ] if input_artifacts_data else []
+
     # params must be a dict of role-internal flags only
     if params is None:
         params = {}
@@ -224,6 +231,7 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
         sha=sha or None,
         params=params,
         eval_spec=normalized_eval_spec,
+        input_artifacts=input_artifacts,  # ADR-0013
     )
 
 
@@ -286,6 +294,19 @@ _SPAWN_SCHEMA: dict = {
                                         "type": "array",
                                         "items": {"type": "string"},
                                         "description": "How the task should be verified.",
+                                    },
+                                },
+                            },
+                            "input_artifacts": {
+                                "type": "array",
+                                "description": "Artifacts to materialize in child workspace (ADR-0013).",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "ref": {"type": "object"},
+                                        "relation": {"type": "string"},
+                                        "path": {"type": "string"},
+                                        "metadata": {"type": "object"},
                                     },
                                 },
                             },

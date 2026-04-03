@@ -39,10 +39,10 @@ def _default_publication_fn(
     **params,
 ):
     if (result or {}).get("status") == "failed":
-        return None
+        return None, []
     if not repo:
-        return None
-    return "branch:sha"
+        return None, []
+    return "branch:sha", []
 
 
 _default_publication_fn.__publication_strategy__ = "branch"
@@ -138,7 +138,7 @@ def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
     publication_mock = MagicMock(
         side_effect=[
             PublicationGuardrailViolation(["Sensitive-looking file tracked: .env"]),
-            "branch:sha",
+            ("branch:sha", []),
         ]
     )
     publication_mock.__publication_strategy__ = "branch"
@@ -220,7 +220,7 @@ def test_runner_propagates_cost_tracking_degraded_flag(tmp_path):
     config = JobConfig(job_id="job-1", task="x")
     config.llm.model = "unknown-model"
     config.llm.max_total_cost = 0.5
-    publication_mock = MagicMock(return_value="branch:sha")
+    publication_mock = MagicMock(return_value=("branch:sha", []))
     publication_mock.__publication_strategy__ = "branch"
     publication_mock.__publication_branch_prefix__ = "palimpsest/job"
     spec = _spec(publication_fn=publication_mock)
@@ -266,7 +266,7 @@ def test_job_timeout_emits_failed_with_timeout_code(tmp_path):
 def test_runner_emits_budget_exhausted_code_on_clean_partial_exit(tmp_path):
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-1", task="x")
-    publication_mock = MagicMock(return_value="branch:sha")
+    publication_mock = MagicMock(return_value=("branch:sha", []))
     publication_mock.__publication_strategy__ = "branch"
     publication_mock.__publication_branch_prefix__ = "palimpsest/job"
     spec = _spec(publication_fn=publication_mock)
@@ -417,7 +417,7 @@ def test_job_completed_exposes_empty_artifact_bindings_by_default(tmp_path):
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-adr0013", task="verify artifact bindings")
     config.workspace.repo = "https://example.com/repo.git"
-    publication_mock = MagicMock(return_value="palimpsest/job-adr0013:abc123")
+    publication_mock = MagicMock(return_value=("palimpsest/job-adr0013:abc123", []))
     publication_mock.__publication_strategy__ = "branch"
     publication_mock.__publication_branch_prefix__ = "palimpsest/job"
     spec = _spec(publication_fn=publication_mock)

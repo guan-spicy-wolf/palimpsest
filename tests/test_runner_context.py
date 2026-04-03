@@ -29,10 +29,10 @@ class RecordingEmitter:
 
 def _default_publication_fn(*, result=None, repo="", **params):
     if (result or {}).get("status") == "failed":
-        return None
+        return None, []
     if not repo:
-        return None
-    return "branch:sha"
+        return None, []
+    return "branch:sha", []
 
 
 _default_publication_fn.__publication_strategy__ = "branch"
@@ -133,7 +133,7 @@ def test_runner_sets_workspace_path_on_context(tmp_path):
         # Capture workspace_path value at pub time (after it's set)
         if runtime_context:
             workspace_path_at_pub.append(runtime_context.workspace_path)
-        return "branch:sha"
+        return "branch:sha", []
 
     capture_pub.__publication_strategy__ = "branch"
     capture_pub.__publication_branch_prefix__ = "palimpsest/job"
@@ -200,7 +200,7 @@ def test_runner_passes_runtime_context_to_publication_fn(tmp_path):
     captured = {}
     def capture_pub(runtime_context=None, **params):
         captured["runtime_context"] = runtime_context
-        return "branch:sha"
+        return "branch:sha", []
 
     capture_pub.__publication_strategy__ = "branch"
     capture_pub.__publication_branch_prefix__ = "palimpsest/job"
@@ -305,7 +305,7 @@ def test_runtime_context_can_be_used_by_preparation_fn(tmp_path):
         if runtime_context:
             # Capture resources at pub time (should still have the connection)
             resources_at_pub.append(dict(runtime_context.resources))
-        return "branch:sha"
+        return "branch:sha", []
 
     pub_with_resources.__publication_strategy__ = "branch"
     pub_with_resources.__publication_branch_prefix__ = "palimpsest/job"

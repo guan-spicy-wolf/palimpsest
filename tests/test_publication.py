@@ -28,26 +28,32 @@ def test_publication_commits_changes(tmp_path):
         return orig_execute(self, command, *args, **kwargs)
 
     with patch.object(git.cmd.Git, "execute", autospec=True, side_effect=execute_side_effect):
-        git_ref = publish_results("test-1", "task-1", "Define shared graph contracts", result, str(tmp_path), config)
+        git_ref, artifact_bindings = publish_results("test-1", "task-1", "Define shared graph contracts", result, str(tmp_path), config)
 
     assert git_ref is not None
     assert "palimpsest/job/test-1:" in git_ref
     assert repo.head.commit.message.startswith("agent.job.completed: test")
+    # Artifact bindings should be created
+    assert len(artifact_bindings) > 0
+    assert any(b.relation == "output" for b in artifact_bindings)
 
 
 def test_publication_skips_failed_job(tmp_path):
     """Failed jobs skip publication."""
     config = PublicationConfig()
     result = {"status": "failed"}
-    git_ref = publish_results("test-2", "task-2", "Goal", result, str(tmp_path), config)
+    git_ref, artifact_bindings = publish_results("test-2", "task-2", "Goal", result, str(tmp_path), config)
     assert git_ref is None
+    assert artifact_bindings == []
 
 
 def test_publication_skips_repoless_workspace(tmp_path):
     config = PublicationConfig()
     result = {"status": "success", "summary": "meta job"}
-    git_ref = publish_results("test-meta", "task-meta", "Meta", result, str(tmp_path), config)
+    git_ref, artifact_bindings = publish_results("test-meta", "task-meta", "Meta", result, str(tmp_path), config)
     assert git_ref is None
+    # Repoless workspace still creates artifact bindings
+    assert len(artifact_bindings) > 0
 
 
 def test_publication_skips_when_strategy_is_skip(tmp_path):
@@ -59,8 +65,9 @@ def test_publication_skips_when_strategy_is_skip(tmp_path):
 
     config = PublicationConfig(strategy="skip")
     result = {"status": "success", "summary": "eval"}
-    git_ref = publish_results("test-skip", "task-skip", "Eval", result, str(tmp_path), config)
+    git_ref, artifact_bindings = publish_results("test-skip", "task-skip", "Eval", result, str(tmp_path), config)
     assert git_ref is None
+    assert artifact_bindings == []
 
 
 def test_publication_push_failure_propagates(tmp_path):

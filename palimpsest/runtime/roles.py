@@ -78,7 +78,7 @@ def git_publication(
     *,
     strategy: str = "branch",
     branch_prefix: str = "palimpsest/job",
-) -> Callable[..., str | None]:
+) -> Callable[..., tuple[str | None, list]]:
     def fn(
         *,
         result: dict[str, Any],
@@ -89,31 +89,44 @@ def git_publication(
         git_token_env: str = "",
         base_sha: str = "",
         **params: Any,
-    ) -> str | None:
+    ) -> tuple[str | None, list]:
+        """Git commit/push and artifact binding creation.
+
+        Returns:
+            (git_ref, artifact_bindings) tuple.
+        """
         import git
+        from pathlib import Path
 
         from palimpsest.stages.finalization import find_publication_issues
-        from palimpsest.stages.publication import PublicationGuardrailViolation, publish_results
+        from palimpsest.stages.publication import (
+            PublicationGuardrailViolation,
+            publish_results,
+        )
 
         config = PublicationConfig(
             strategy=str(params.get("publication_strategy", strategy) or strategy),
             branch_prefix=str(params.get("branch_prefix", branch_prefix) or branch_prefix),
         )
         if result.get("status") == "failed":
-            return None
+            return None, []
         if config.strategy == "skip":
-            return None
+            return None, []
 
         try:
             repo = git.Repo(workspace_path)
         except git.InvalidGitRepositoryError:
-            return None
+            # Repoless workspace: create artifact bindings without Git
+            from pathlib import Path
+            from palimpsest.stages.publication import create_artifact_bindings
+            artifact_bindings = create_artifact_bindings(workspace_path)
+            return None, artifact_bindings
 
         issues = find_publication_issues(repo, base_sha=base_sha)
         if issues:
             raise PublicationGuardrailViolation(issues)
 
-        return publish_results(
+        git_ref, artifact_bindings = publish_results(
             job_id,
             task_id,
             goal,
@@ -122,6 +135,7 @@ def git_publication(
             config,
             git_token_env=git_token_env,
         )
+        return git_ref, artifact_bindings
 
     fn.__publication_strategy__ = strategy
     fn.__publication_branch_prefix__ = branch_prefix
