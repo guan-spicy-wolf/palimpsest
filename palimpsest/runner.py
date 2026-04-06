@@ -30,6 +30,7 @@ import inspect
 import io
 import signal
 import subprocess
+import sys
 import tarfile
 import tempfile
 import traceback
@@ -107,6 +108,14 @@ def _run_job_from_spec(
 
     evo_sha = resolved_evo_sha or _read_evo_sha(evo_path)
     logger.info(f"Starting job {job_id} (evo={evo_sha[:8] if evo_sha else '?'})")
+
+    # Make evo importable as a package root so role/tool/context modules can
+    # `from teams.<team>.lib... import ...` against the materialized evo tree.
+    # This is the MVP single-bundle bridge; Phase 2 multi-bundle will replace
+    # this with per-bundle sys.path injection.
+    evo_path_str = str(evo_path)
+    if evo_path_str not in sys.path:
+        sys.path.insert(0, evo_path_str)
 
     _install_timeout(config.timeout)
 

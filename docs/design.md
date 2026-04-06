@@ -25,6 +25,10 @@ After resolution, the runtime only sees the flat job spec.
 
 Evo providers are loaded with isolated `importlib` scopes. They do not leak into `sys.modules`, and they can be replaced between jobs without restarting the runtime.
 
+For the current single-bundle MVP, the materialized `evo_root` is also treated as a Python import root. This allows runtime-executed evo modules to import shared code such as `teams.<team>.lib.*` while still being loaded from file paths via `importlib`.
+
+The current implementation establishes this by injecting the materialized `evo_path` into `sys.path` at job start. This is an explicit runtime contract for team-specific roles, tools, and context providers, not a preparation-function concern. A future multi-bundle design may replace this with a more scoped import strategy, but the invariant remains: evo-executed modules must be able to import team-local shared libraries.
+
 ### 3. Task Lifecycle Is Owned By Trenni
 
 Palimpsest does not infer or broadcast task state. It only manages execution of a single job:
