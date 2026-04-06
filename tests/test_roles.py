@@ -6,7 +6,7 @@ from palimpsest.config import JobConfig
 from palimpsest.runtime.contexts import resolve_context_functions
 from palimpsest.runtime.roles import RoleManager, TeamManager, role, RoleMetadata
 
-EVO_ROOT = Path(__file__).parent.parent / "evo"
+EVO_ROOT = Path(__file__).parent.parent / "evo"  # NOTE: tests/fixtures/evo used by optimizer_role_discovery tests
 
 
 def test_role_decorator_accepts_max_cost():

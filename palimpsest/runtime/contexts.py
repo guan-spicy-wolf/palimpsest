@@ -47,26 +47,30 @@ def _load_context_functions(py_path: Path) -> dict[str, Callable]:
 def resolve_context_functions(
     evo_root: str | Path,
     requested: list[str],
+    team: str = "default",
 ) -> dict[str, Callable]:
-    """Scan evo/contexts/*.py and return requested @context_provider functions."""
-    scan_dir = Path(evo_root) / "contexts"
-    if not scan_dir.is_dir():
-        logger.warning(f"Context directory not found: {scan_dir}")
-        return {}
-
+    """Scan evo/teams/<team>/contexts/ first, then evo/contexts/ for fallback.
+    
+    Per Factorio Tool Evolution MVP: team-specific contexts have higher priority.
+    This enables factorio team to have its own context providers (e.g., factorio_scripts).
+    """
     requested_set = set(requested)
     result: dict[str, Callable] = {}
-
-    for py_file in sorted(scan_dir.glob("*.py")):
-        if py_file.name.startswith("_"):
+    
+    # Scan team-specific first (higher priority)
+    team_dir = Path(evo_root) / "teams" / team / "contexts"
+    global_dir = Path(evo_root) / "contexts"
+    
+    for scan_dir in (team_dir, global_dir):
+        if not scan_dir.is_dir():
             continue
-            
-        funcs = _load_context_functions(py_file)
-        for section_type, func in funcs.items():
-            if section_type in requested_set:
-                if section_type in result:
-                    logger.warning(f"Duplicate context provider for {section_type!r}, overwriting.")
-                result[section_type] = func
+        for py_file in sorted(scan_dir.glob("*.py")):
+            if py_file.name.startswith("_"):
+                continue
+            funcs = _load_context_functions(py_file)
+            for section_type, func in funcs.items():
+                if section_type in requested_set and section_type not in result:
+                    result[section_type] = func
 
     missing = requested_set - set(result.keys())
     if missing:

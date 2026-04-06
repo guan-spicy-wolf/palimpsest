@@ -148,14 +148,19 @@ def run_interaction_loop(
     user_prompt: str | None = None,
     runtime_context: RuntimeContext | None = None,
 ) -> dict:
-    """Core agent loop. Returns {"summary": str, "status": str, "code": str, "messages": list}.
+    """Core agent loop. Returns {"summary": str, "status": str, "code": str, "messages": list, "tool_call_history": list}.
 
     Completion is determined by the runtime:
       - LLM stops calling tools → confirm once, then end using the first idle summary
       - Any enforced budget is exhausted → end with status=partial, code=budget_exhausted
 
     ADR-0011: runtime_context is passed to tools.execute() for injection into tool calls.
+    
+    Factorio Tool Evolution MVP: tool_call_history is collected for pattern detection.
     """
+    import json
+    from palimpsest.runtime.tool_pattern import ToolCallRecord
+    
     if messages is None:
         messages = [{"role": "user", "content": context["task"]}]
     else:
@@ -167,6 +172,7 @@ def run_interaction_loop(
     idle_confirmation_pending = False
     candidate_summary: str | None = None
     loop_warnings = _build_loop_warnings()
+    tool_call_history: list[ToolCallRecord] = []
 
     while True:
         budget_reason = llm.budget_exhausted()
@@ -181,6 +187,7 @@ def run_interaction_loop(
                 "code": "budget_exhausted",
                 "budget_dim": budget_reason,
                 "messages": messages,
+                "tool_call_history": tool_call_history,
             }
 
         for w in loop_warnings:
@@ -224,6 +231,7 @@ def run_interaction_loop(
                 "status": "complete",
                 "code": "",
                 "messages": messages,
+                "tool_call_history": tool_call_history,
             }
 
         idle_confirmation_pending = False
@@ -231,3 +239,8 @@ def run_interaction_loop(
         for tc in response.tool_calls:
             result = tools.execute(tc.name, tc.id, tc.arguments, workspace_path, runtime_context=runtime_context)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result.output})
+            # Record tool call for pattern detection
+            tool_call_history.append(ToolCallRecord(
+                name=tc.name,
+                args_json=json.dumps(tc.arguments, sort_keys=True),
+            ))

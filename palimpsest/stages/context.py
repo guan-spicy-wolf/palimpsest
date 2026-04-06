@@ -41,7 +41,7 @@ def build_context(
 
     registry = {}
     if evo_root:
-        registry = resolve_context_functions(evo_root, section_types)
+        registry = resolve_context_functions(evo_root, section_types, team=job_config.team)
 
     parts: list[str] = []
     for section in sections:

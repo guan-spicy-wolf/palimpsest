@@ -115,6 +115,7 @@ def _run_job_from_spec(
         job_id=job_id,
         task_id=task_id,
         team=config.team,
+        role=config.role,
     )
 
     workspace: str | None = None
@@ -138,6 +139,8 @@ def _run_job_from_spec(
         prep_sig = inspect.signature(spec.preparation_fn)
         if "runtime_context" in prep_sig.parameters:
             prep_params["runtime_context"] = runtime_context
+        if "evo_root" in prep_sig.parameters:
+            prep_params["evo_root"] = str(evo_path)
         workspace_cfg = spec.preparation_fn(**prep_params)
         workspace = setup_workspace(
             job_id,
@@ -279,6 +282,8 @@ def _stage_interaction_and_publication(
 ) -> tuple[dict, str]:
     """Stage 3+4: interaction loop with publication recovery. Returns (result, git_ref)."""
     from palimpsest.events import StageTransitionData
+    from palimpsest.runtime.tool_pattern import detect_repetition
+    from yoitsu_contracts.observation import ObservationToolRepetitionEvent
     gateway.emit(StageTransitionData(from_stage="context", to_stage="interaction"))
 
     interaction_messages: list[dict] | None = None
@@ -306,6 +311,22 @@ def _stage_interaction_and_publication(
         )
         should_publish = publication_strategy != "skip"
         if not should_publish:
+            # Emit observation events for detected patterns (no publication)
+            tool_call_history = result.get("tool_call_history", [])
+            repetitions = detect_repetition(tool_call_history)
+            for r in repetitions:
+                if runtime_context:
+                    event = ObservationToolRepetitionEvent(
+                        job_id=job_id,
+                        task_id=config.task_id or job_id,
+                        role=runtime_context.role,
+                        team=runtime_context.team,
+                        tool_name=r.tool_name,
+                        call_count=r.call_count,
+                        arg_pattern=r.arg_pattern,
+                        similarity=r.similarity,
+                    )
+                    gateway.emit(event)
             return result, None
 
         gateway.emit(StageTransitionData(from_stage="interaction", to_stage="publication"))
@@ -328,6 +349,24 @@ def _stage_interaction_and_publication(
                 **publication_params,
             )
             result["artifact_bindings"] = artifact_bindings or []
+            
+            # Emit observation events for detected patterns
+            tool_call_history = result.get("tool_call_history", [])
+            repetitions = detect_repetition(tool_call_history)
+            for r in repetitions:
+                if runtime_context:
+                    event = ObservationToolRepetitionEvent(
+                        job_id=job_id,
+                        task_id=config.task_id or job_id,
+                        role=runtime_context.role,
+                        team=runtime_context.team,
+                        tool_name=r.tool_name,
+                        call_count=r.call_count,
+                        arg_pattern=r.arg_pattern,
+                        similarity=r.similarity,
+                    )
+                    gateway.emit(event)
+            
             return result, git_ref
         except PublicationGuardrailViolation as exc:
             can_retry = publication_recovery_attempts < max_recovery_attempts

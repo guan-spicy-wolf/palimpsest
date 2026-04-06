@@ -41,6 +41,7 @@ class RuntimeContext:
     job_id: str = ""
     task_id: str = ""
     team: str = "default"  # team name for tools and publication
+    role: str = ""  # role name for observation events
     resources: dict[str, Any] = field(default_factory=dict)
     _cleanup_fns: list[Callable] = field(default_factory=list, repr=False)
 

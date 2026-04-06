@@ -38,3 +38,56 @@ def test_resolve_context_ignores_unrequested(tmp_path):
     registry = resolve_context_functions(tmp_path, ["a"])
     assert "a" in registry
     assert "b" not in registry
+
+
+def test_team_context_overrides_global(tmp_path):
+    """Team-specific context provider has higher priority than global."""
+    # Create global context
+    (tmp_path / "contexts").mkdir()
+    (tmp_path / "contexts" / "test.py").write_text(textwrap.dedent("""\
+        from palimpsest.runtime.contexts import context_provider
+
+        @context_provider("foo")
+        def foo(**_) -> str:
+            return "global"
+    """))
+    
+    # Create team-specific context
+    (tmp_path / "teams" / "factorio" / "contexts").mkdir(parents=True)
+    (tmp_path / "teams" / "factorio" / "contexts" / "test.py").write_text(textwrap.dedent("""\
+        from palimpsest.runtime.contexts import context_provider
+
+        @context_provider("foo")
+        def foo(**_) -> str:
+            return "team"
+    """))
+    
+    # Team context should be prioritized
+    result = resolve_context_functions(tmp_path, ["foo"], team="factorio")
+    assert "foo" in result
+    assert result["foo"]() == "team"  # team version wins
+    
+    # Default team uses global
+    result_default = resolve_context_functions(tmp_path, ["foo"], team="default")
+    assert result_default["foo"]() == "global"
+
+
+def test_team_context_fallback_to_global(tmp_path):
+    """When team context doesn't have requested provider, fall back to global."""
+    # Create global context only
+    (tmp_path / "contexts").mkdir()
+    (tmp_path / "contexts" / "global.py").write_text(textwrap.dedent("""\
+        from palimpsest.runtime.contexts import context_provider
+
+        @context_provider("shared")
+        def shared(**_) -> str:
+            return "global_shared"
+    """))
+    
+    # Team without its own context
+    (tmp_path / "teams" / "factorio").mkdir(parents=True)
+    # No contexts subdirectory for factorio team
+    
+    result = resolve_context_functions(tmp_path, ["shared"], team="factorio")
+    assert "shared" in result
+    assert result["shared"]() == "global_shared"  # fallback to global
