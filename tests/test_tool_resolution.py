@@ -1,6 +1,7 @@
-"""Tests for two-layer tool resolution (global + bundle-specific).
+"""Tests for bundle-only tool resolution (Bundle MVP).
 
-Per ADR-0011 D2: bundle-specific tools shadow global tools of the same name.
+Per Bundle MVP: Tools are loaded from evo/<bundle>/tools/ only.
+No global fallback, no team layer.
 """
 import textwrap
 from pathlib import Path
@@ -16,162 +17,69 @@ from palimpsest.runtime.tools import (
 from palimpsest.config import ToolsConfig
 
 
-class TestResolveToolFunctionsTwoLayer:
-    """Tests for resolve_tool_functions with bundle parameter."""
+class TestResolveToolFunctionsBundleOnly:
+    """Tests for resolve_tool_functions with bundle-only resolution."""
 
-    def test_finds_global_tools(self, tmp_path: Path) -> None:
-        """Global tools in evo/tools/ are discovered."""
-        tools_dir = tmp_path / "tools"
-        tools_dir.mkdir()
-        (tools_dir / "global_tool.py").write_text(textwrap.dedent("""\
+    def test_finds_bundle_tools(self, tmp_path: Path) -> None:
+        """Bundle tools in evo/<bundle>/tools/ are discovered."""
+        tools_dir = tmp_path / "factorio" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "bundle_tool.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
-            def global_tool(msg: str) -> ToolResult:
-                \"\"\"A global tool.\"\"\"
+            def bundle_tool(msg: str) -> ToolResult:
+                \"\"\"A bundle-specific tool.\"\"\"
+                return ToolResult(success=True, output=f"bundle: {msg}")
+        """))
+
+        funcs = resolve_tool_functions(tmp_path, "factorio", ["bundle_tool"])
+        assert "bundle_tool" in funcs
+        result = funcs["bundle_tool"](msg="hello")
+        assert result.output == "bundle: hello"
+
+    def test_empty_bundle_returns_empty(self, tmp_path: Path) -> None:
+        """Empty bundle parameter returns empty dict."""
+        tools_dir = tmp_path / "factorio" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "tool.py").write_text(textwrap.dedent("""\
+            from palimpsest.runtime.tools import tool, ToolResult
+
+            @tool
+            def tool_fn(msg: str) -> ToolResult:
                 return ToolResult(success=True, output=msg)
         """))
 
-        funcs = resolve_tool_functions(tmp_path, "default", ["global_tool"])
-        assert "global_tool" in funcs
-        result = funcs["global_tool"](msg="hello")
-        assert result.output == "hello"
+        funcs = resolve_tool_functions(tmp_path, "", ["tool_fn"])
+        assert funcs == {}
 
-    def test_finds_team_specific_tools(self, tmp_path: Path) -> None:
-        """Team-specific tools in evo/bundles/<bundle>/tools/ are discovered."""
-        # Create bundle-specific tools directory
-        bundle_tools_dir = tmp_path / "teams" / "alpha" / "tools"
-        bundle_tools_dir.mkdir(parents=True)
-        (bundle_tools_dir / "bundle_tool.py").write_text(textwrap.dedent("""\
+    def test_nonexistent_bundle_returns_empty(self, tmp_path: Path) -> None:
+        """Nonexistent bundle returns empty dict."""
+        tools_dir = tmp_path / "factorio" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "tool.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
-            def bundle_tool(msg: str) -> ToolResult:
-                \"\"\"A bundle-specific tool.\"\"\"
-                return ToolResult(success=True, output=f"team: {msg}")
+            def tool_fn(msg: str) -> ToolResult:
+                return ToolResult(success=True, output=msg)
         """))
 
-        funcs = resolve_tool_functions(tmp_path, "alpha", ["bundle_tool"])
-        assert "bundle_tool" in funcs
-        result = funcs["bundle_tool"](msg="hello")
-        assert result.output == "team: hello"
-
-    def test_bundle_tool_shadows_global_tool(self, tmp_path: Path) -> None:
-        """Team-specific tool shadows global tool of the same name (ADR-0011 D2)."""
-        # Create global tool
-        tools_dir = tmp_path / "tools"
-        tools_dir.mkdir()
-        (tools_dir / "echo.py").write_text(textwrap.dedent("""\
-            from palimpsest.runtime.tools import tool, ToolResult
-
-            @tool
-            def echo(msg: str) -> ToolResult:
-                \"\"\"Global echo.\"\"\"
-                return ToolResult(success=True, output=f"global: {msg}")
-        """))
-
-        # Create bundle-specific tool with same name
-        bundle_tools_dir = tmp_path / "teams" / "alpha" / "tools"
-        bundle_tools_dir.mkdir(parents=True)
-        (bundle_tools_dir / "echo.py").write_text(textwrap.dedent("""\
-            from palimpsest.runtime.tools import tool, ToolResult
-
-            @tool
-            def echo(msg: str) -> ToolResult:
-                \"\"\"Team-specific echo.\"\"\"
-                return ToolResult(success=True, output=f"team-alpha: {msg}")
-        """))
-
-        funcs = resolve_tool_functions(tmp_path, "alpha", ["echo"])
-        assert "echo" in funcs
-        # Should be bundle-specific, not global
-        result = funcs["echo"](msg="hello")
-        assert result.output == "team-alpha: hello"
-
-    def test_global_and_bundle_tools_both_available(self, tmp_path: Path) -> None:
-        """Both global and team tools are available when they have different names."""
-        # Create global tool
-        tools_dir = tmp_path / "tools"
-        tools_dir.mkdir()
-        (tools_dir / "global_tool.py").write_text(textwrap.dedent("""\
-            from palimpsest.runtime.tools import tool, ToolResult
-
-            @tool
-            def global_tool(msg: str) -> ToolResult:
-                \"\"\"A global tool.\"\"\"
-                return ToolResult(success=True, output=f"global: {msg}")
-        """))
-
-        # Create bundle-specific tool with different name
-        bundle_tools_dir = tmp_path / "teams" / "beta" / "tools"
-        bundle_tools_dir.mkdir(parents=True)
-        (bundle_tools_dir / "bundle_tool.py").write_text(textwrap.dedent("""\
-            from palimpsest.runtime.tools import tool, ToolResult
-
-            @tool
-            def bundle_tool(msg: str) -> ToolResult:
-                \"\"\"A bundle-specific tool.\"\"\"
-                return ToolResult(success=True, output=f"team-beta: {msg}")
-        """))
-
-        funcs = resolve_tool_functions(tmp_path, "beta", ["global_tool", "bundle_tool"])
-        assert "global_tool" in funcs
-        assert "bundle_tool" in funcs
-        assert funcs["global_tool"](msg="x").output == "global: x"
-        assert funcs["bundle_tool"](msg="y").output == "team-beta: y"
-
-    def test_no_bundle_tools_dir_falls_back_to_global(self, tmp_path: Path) -> None:
-        """If team has no tools directory, falls back to global tools."""
-        # Create global tool
-        tools_dir = tmp_path / "tools"
-        tools_dir.mkdir()
-        (tools_dir / "fallback.py").write_text(textwrap.dedent("""\
-            from palimpsest.runtime.tools import tool, ToolResult
-
-            @tool
-            def fallback(msg: str) -> ToolResult:
-                \"\"\"A fallback tool.\"\"\"
-                return ToolResult(success=True, output=f"fallback: {msg}")
-        """))
-
-        # No team tools directory for team "gamma"
-        funcs = resolve_tool_functions(tmp_path, "gamma", ["fallback"])
-        assert "fallback" in funcs
-        result = funcs["fallback"](msg="test")
-        assert result.output == "fallback: test"
-
-    def test_no_global_tools_dir_still_finds_bundle_tools(self, tmp_path: Path) -> None:
-        """If no global tools directory, team tools still work."""
-        # No global tools directory
-        # Create bundle-specific tools
-        bundle_tools_dir = tmp_path / "teams" / "delta" / "tools"
-        bundle_tools_dir.mkdir(parents=True)
-        (bundle_tools_dir / "only_team.py").write_text(textwrap.dedent("""\
-            from palimpsest.runtime.tools import tool, ToolResult
-
-            @tool
-            def only_team(msg: str) -> ToolResult:
-                \"\"\"Only in team.\"\"\"
-                return ToolResult(success=True, output=f"team-only: {msg}")
-        """))
-
-        funcs = resolve_tool_functions(tmp_path, "delta", ["only_team"])
-        assert "only_team" in funcs
-        result = funcs["only_team"](msg="test")
-        assert result.output == "team-only: test"
+        funcs = resolve_tool_functions(tmp_path, "nonexistent", ["tool_fn"])
+        assert funcs == {}
 
     def test_returns_empty_for_missing_tools(self, tmp_path: Path) -> None:
         """Returns empty dict when no requested tools are found."""
-        tools_dir = tmp_path / "tools"
-        tools_dir.mkdir()
+        tools_dir = tmp_path / "factorio" / "tools"
+        tools_dir.mkdir(parents=True)
 
-        funcs = resolve_tool_functions(tmp_path, "default", ["nonexistent"])
+        funcs = resolve_tool_functions(tmp_path, "factorio", ["nonexistent"])
         assert funcs == {}
 
     def test_ignores_underscore_prefixed_files(self, tmp_path: Path) -> None:
         """Files starting with underscore are ignored."""
-        tools_dir = tmp_path / "tools"
-        tools_dir.mkdir()
+        tools_dir = tmp_path / "factorio" / "tools"
+        tools_dir.mkdir(parents=True)
         (tools_dir / "_private.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
@@ -187,20 +95,44 @@ class TestResolveToolFunctionsTwoLayer:
                 return ToolResult(success=True, output=msg)
         """))
 
-        funcs = resolve_tool_functions(tmp_path, "default", ["private_tool", "public_tool"])
+        funcs = resolve_tool_functions(tmp_path, "factorio", ["private_tool", "public_tool"])
         assert "private_tool" not in funcs  # In _private.py, should be ignored
         assert "public_tool" in funcs
 
+    def test_multiple_tools_in_bundle(self, tmp_path: Path) -> None:
+        """Multiple tools in bundle are all discovered."""
+        tools_dir = tmp_path / "factorio" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "tool_a.py").write_text(textwrap.dedent("""\
+            from palimpsest.runtime.tools import tool, ToolResult
 
-class TestUnifiedToolGatewayWithTeam:
+            @tool
+            def tool_a(msg: str) -> ToolResult:
+                return ToolResult(success=True, output=f"a: {msg}")
+        """))
+        (tools_dir / "tool_b.py").write_text(textwrap.dedent("""\
+            from palimpsest.runtime.tools import tool, ToolResult
+
+            @tool
+            def tool_b(msg: str) -> ToolResult:
+                return ToolResult(success=True, output=f"b: {msg}")
+        """))
+
+        funcs = resolve_tool_functions(tmp_path, "factorio", ["tool_a", "tool_b"])
+        assert "tool_a" in funcs
+        assert "tool_b" in funcs
+        assert funcs["tool_a"](msg="x").output == "a: x"
+        assert funcs["tool_b"](msg="y").output == "b: y"
+
+
+class TestUnifiedToolGatewayWithBundle:
     """Tests for UnifiedToolGateway with bundle parameter."""
 
     def test_gateway_loads_bundle_tools(self, tmp_path: Path) -> None:
         """UnifiedToolGateway loads bundle-specific tools."""
-        # Create bundle-specific tool
-        bundle_tools_dir = tmp_path / "teams" / "engineering" / "tools"
-        bundle_tools_dir.mkdir(parents=True)
-        (bundle_tools_dir / "deploy.py").write_text(textwrap.dedent("""\
+        tools_dir = tmp_path / "engineering" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "deploy.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
@@ -222,30 +154,16 @@ class TestUnifiedToolGatewayWithTeam:
         names = [schema["function"]["name"] for schema in schemas]
         assert "deploy" in names
 
-    def test_gateway_bundle_tool_shadows_global(self, tmp_path: Path) -> None:
-        """Team-specific tool shadows global in UnifiedToolGateway."""
-        # Create global tool
-        tools_dir = tmp_path / "tools"
-        tools_dir.mkdir()
-        (tools_dir / "build.py").write_text(textwrap.dedent("""\
+    def test_gateway_empty_bundle_no_tools(self, tmp_path: Path) -> None:
+        """UnifiedToolGateway with empty bundle has no evo tools."""
+        tools_dir = tmp_path / "factorio" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "tool.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
-            def build(target: str) -> ToolResult:
-                \"\"\"Global build.\"\"\"
-                return ToolResult(success=True, output=f"global build: {target}")
-        """))
-
-        # Create bundle-specific tool with same name
-        bundle_tools_dir = tmp_path / "teams" / "special" / "tools"
-        bundle_tools_dir.mkdir(parents=True)
-        (bundle_tools_dir / "build.py").write_text(textwrap.dedent("""\
-            from palimpsest.runtime.tools import tool, ToolResult
-
-            @tool
-            def build(target: str) -> ToolResult:
-                \"\"\"Team-specific build.\"\"\"
-                return ToolResult(success=True, output=f"team build: {target}")
+            def tool_fn(msg: str) -> ToolResult:
+                return ToolResult(success=True, output=msg)
         """))
 
         config = ToolsConfig(disabled_builtins=["bash", "spawn", "create_pr"])
@@ -253,12 +171,10 @@ class TestUnifiedToolGatewayWithTeam:
         gw = UnifiedToolGateway(
             config,
             tmp_path,
-            "special",  # bundle parameter
-            ["build"],
+            "",  # empty bundle
+            ["tool_fn"],
             gateway,
         )
-
-        # Execute should use bundle-specific version
-        result = gw.execute("build", "call-1", {"target": "prod"}, "/workspace")
-        assert result.success
-        assert "bundle build" in result.output
+        schemas = gw.schema()
+        names = [schema["function"]["name"] for schema in schemas]
+        assert "tool_fn" not in names  # No evo tools loaded
