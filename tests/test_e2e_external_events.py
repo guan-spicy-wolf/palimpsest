@@ -95,15 +95,17 @@ class TestE2EExternalEventFlow:
         assert github["issue"]["number"] == 123
         assert "needs-review" in github["issue"]["labels"]
 
-    @pytest.mark.skip(reason="github_context provider requires bundle-specific directory")
     def test_github_context_provider_renders_pr_context(self):
         """GitHub context provider can render PR context."""
         # Create a mock job config with GitHub context
         from palimpsest.config import JobConfig
+        from palimpsest.runtime.contexts import resolve_context_functions
+        from pathlib import Path
 
         job_config = JobConfig(
             job_id="test-job",
             goal="Review PR #42",
+            bundle="factorio",
             role_params={
                 "github_context": {
                     "pr": {
@@ -123,11 +125,12 @@ class TestE2EExternalEventFlow:
             }
         )
 
-        # Import and call the context provider
-        # Note: This tests the provider function directly
-        from evo.contexts.loaders import github_context
-
-        result = github_context(job_config)
+        # Load context provider via resolve_context_functions
+        evo_root = Path(__file__).parent.parent.parent / "evo"
+        registry = resolve_context_functions(evo_root, ["github_context"], bundle="factorio")
+        assert "github_context" in registry, "github_context provider not found in factorio bundle"
+        
+        result = registry["github_context"](job_config=job_config)
 
         assert "GitHub Context" in result
         assert "Pull Request" in result
@@ -137,15 +140,16 @@ class TestE2EExternalEventFlow:
         assert "developer" in result
         assert "src/main.py" in result
 
-    @pytest.mark.skip(reason="github_context provider requires bundle-specific directory")
     def test_github_context_provider_renders_issue_context(self):
         """GitHub context provider can render Issue context."""
         from palimpsest.config import JobConfig
-        from evo.contexts.loaders import github_context
+        from palimpsest.runtime.contexts import resolve_context_functions
+        from pathlib import Path
 
         job_config = JobConfig(
             job_id="test-job",
             goal="Review Issue #123",
+            bundle="factorio",
             role_params={
                 "github_context": {
                     "issue": {
@@ -163,7 +167,10 @@ class TestE2EExternalEventFlow:
             }
         )
 
-        result = github_context(job_config)
+        # Load context provider via resolve_context_functions
+        evo_root = Path(__file__).parent.parent.parent / "evo"
+        registry = resolve_context_functions(evo_root, ["github_context"], bundle="factorio")
+        result = registry["github_context"](job_config=job_config)
 
         assert "GitHub Context" in result
         assert "Issue" in result
@@ -216,9 +223,11 @@ class TestE2EExternalEventFlow:
 class TestE2EFullPipeline:
     """Full pipeline tests from external event to context rendering."""
 
-    @pytest.mark.skip(reason="github_context provider requires bundle-specific directory")
     def test_pr_labeled_to_context_rendering(self):
         """Complete flow: PR labeled event -> context rendering."""
+        from pathlib import Path
+        from palimpsest.runtime.contexts import resolve_context_functions
+
         # Step 1: External event
         event = PRLabeledEvent(
             repo="myorg/myrepo",
@@ -244,13 +253,15 @@ class TestE2EFullPipeline:
         job_config = JobConfig(
             job_id="review-pr-99",
             goal=trigger.goal,
+            bundle="factorio",
             role=trigger.role,
             role_params=trigger.params,
         )
 
-        # Step 5: Render context
-        from evo.contexts.loaders import github_context
-        context = github_context(job_config)
+        # Step 5: Render context via resolve_context_functions
+        evo_root = Path(__file__).parent.parent.parent / "evo"
+        registry = resolve_context_functions(evo_root, ["github_context"], bundle="factorio")
+        context = registry["github_context"](job_config=job_config)
 
         # Step 6: Verify context contains PR info
         assert "Feature: Add OAuth support" in context
