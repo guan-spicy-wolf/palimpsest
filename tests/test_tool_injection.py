@@ -1,4 +1,4 @@
-"""Tests for tool parameter injection."""
+"""Tests for tool parameter injection (Bundle MVP)."""
 
 import tempfile
 from pathlib import Path
@@ -38,7 +38,8 @@ def test_tool_receives_runtime_context_via_injection():
     # Create gateway with the probe tool
     with tempfile.TemporaryDirectory() as tmpdir:
         evo_root = Path(tmpdir)
-        (evo_root / "tools").mkdir()
+        # Bundle MVP: bundle-specific tools directory
+        (evo_root / "factorio" / "tools").mkdir(parents=True)
         
         event_gateway = EventGateway(MockEmitter())
         config = ToolsConfig(builtin={}, disabled_builtins=[])
@@ -46,7 +47,7 @@ def test_tool_receives_runtime_context_via_injection():
         gateway = UnifiedToolGateway(
             config=config,
             evo_root=evo_root,
-            bundle="",
+            bundle="factorio",
             requested_evo_tools=[],
             gateway=event_gateway,
         )
@@ -91,7 +92,8 @@ def test_execute_accepts_runtime_context_parameter():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         evo_root = Path(tmpdir)
-        (evo_root / "tools").mkdir()
+        # Bundle MVP: bundle-specific tools directory
+        (evo_root / "factorio" / "tools").mkdir(parents=True)
         
         event_gateway = EventGateway(MockEmitter())
         config = ToolsConfig(builtin={}, disabled_builtins=[])
@@ -99,7 +101,7 @@ def test_execute_accepts_runtime_context_parameter():
         gateway = UnifiedToolGateway(
             config=config,
             evo_root=evo_root,
-            bundle="",
+            bundle="factorio",
             requested_evo_tools=[],
             gateway=event_gateway,
         )
@@ -107,7 +109,7 @@ def test_execute_accepts_runtime_context_parameter():
         gateway._functions["inspect_context"] = inspect_context
         gateway._schemas.append(inspect_context.__tool_schema__)
 
-        ctx = RuntimeContext(job_id="test-job-123", team="test-team")
+        ctx = RuntimeContext(job_id="test-job-123", bundle="factorio")
         result = gateway.execute("inspect_context", "call-2", {}, "/tmp/ws", runtime_context=ctx)
         
         assert result.success
@@ -124,7 +126,8 @@ def test_tool_without_runtime_context_still_works():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         evo_root = Path(tmpdir)
-        (evo_root / "tools").mkdir()
+        # Bundle MVP: bundle-specific tools directory
+        (evo_root / "factorio" / "tools").mkdir(parents=True)
         
         event_gateway = EventGateway(MockEmitter())
         config = ToolsConfig(builtin={}, disabled_builtins=[])
@@ -132,7 +135,7 @@ def test_tool_without_runtime_context_still_works():
         gateway = UnifiedToolGateway(
             config=config,
             evo_root=evo_root,
-            bundle="",
+            bundle="factorio",
             requested_evo_tools=[],
             gateway=event_gateway,
         )
@@ -146,7 +149,7 @@ def test_tool_without_runtime_context_still_works():
         assert result.output == "Hello World"
         
         # Should also work when runtime_context is passed but tool doesn't use it
-        ctx = RuntimeContext(team="unused")
+        ctx = RuntimeContext(bundle="factorio")
         result = gateway.execute("simple_tool", "call-4", {"name": "Again"}, "/tmp/ws", runtime_context=ctx)
         assert result.success
         assert result.output == "Hello Again"

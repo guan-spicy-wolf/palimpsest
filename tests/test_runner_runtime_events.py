@@ -341,21 +341,38 @@ def test_run_job_resolves_role_before_dispatch(monkeypatch, tmp_path):
         called["evo_path"] = evo_path.name
         called["resolved_evo_sha"] = resolved_evo_sha
 
+    # Create a minimal role in the evo directory
     monkeypatch.chdir(Path(__file__).resolve().parent.parent)
+    # Bundle MVP: create bundle roles directory
+    roles_dir = Path("evo/factorio/roles")
+    roles_dir.mkdir(parents=True, exist_ok=True)
+    (roles_dir / "worker.py").write_text("""\nfrom palimpsest.runtime import JobSpec, role, workspace_config, context_spec, git_publication
+
+@role(name='worker', description='test role')
+def worker() -> JobSpec:
+    return JobSpec(
+        preparation_fn=workspace_config(),
+        context_fn=context_spec('sys', []),
+        publication_fn=git_publication(strategy='skip'),
+        tools=[],
+    )
+""")
+    
     monkeypatch.setattr("palimpsest.runner._run_job_from_spec", fake_run_from_spec)
 
-    config = JobConfig(job_id="job-1", task="x", role="default")
+    config = JobConfig(job_id="job-1", task="x", role="worker", bundle="factorio")
     run_job(config)
 
     assert called["job_id"] == "job-1"
-    assert called["source_role"] == "default"
+    assert called["source_role"] == "worker"
     assert called["evo_path"] == "evo"
 
 
 def test_run_job_materializes_requested_evo_sha(monkeypatch, tmp_path):
     root = tmp_path / "root"
     evo = root / "evo"
-    roles = evo / "roles"
+    # Bundle MVP: roles are in evo/<bundle>/roles/
+    roles = evo / "factorio" / "roles"
     roles.mkdir(parents=True)
     repo = git.Repo.init(evo)
     with repo.config_writer() as writer:
@@ -363,13 +380,13 @@ def test_run_job_materializes_requested_evo_sha(monkeypatch, tmp_path):
         writer.set_value("user", "email", "agent@example.com")
 
     def write_role(version: str) -> None:
-        (roles / "default.py").write_text(
+        (roles / "worker.py").write_text(
             "\n".join(
                 [
                     "from palimpsest.runtime import JobSpec, context_spec, git_publication, role, workspace_config",
                     "",
-                    "@role(name='default', description='test role')",
-                    "def default_role() -> JobSpec:",
+                    "@role(name='worker', description='test role')",
+                    "def worker_role() -> JobSpec:",
                     "    return JobSpec(",
                     "        workspace_fn=workspace_config(),",
                     "        context_fn=context_spec('sys', []),",
@@ -383,11 +400,11 @@ def test_run_job_materializes_requested_evo_sha(monkeypatch, tmp_path):
         )
 
     write_role("v1")
-    repo.index.add(["roles/default.py"])
+    repo.index.add(["factorio/roles/worker.py"])
     commit_v1 = repo.index.commit("v1").hexsha
 
     write_role("v2")
-    repo.index.add(["roles/default.py"])
+    repo.index.add(["factorio/roles/worker.py"])
     repo.index.commit("v2")
 
     captured = {}
@@ -400,7 +417,7 @@ def test_run_job_materializes_requested_evo_sha(monkeypatch, tmp_path):
     monkeypatch.chdir(root)
     monkeypatch.setattr("palimpsest.runner._run_job_from_spec", fake_run_from_spec)
 
-    run_job(JobConfig(job_id="job-sha", task="x", role="default", evo_sha=commit_v1))
+    run_job(JobConfig(job_id="job-sha", task="x", role="worker", bundle="factorio", evo_sha=commit_v1))
 
     assert captured["tools"] == ["v1"]
     assert captured["resolved_evo_sha"] == commit_v1
