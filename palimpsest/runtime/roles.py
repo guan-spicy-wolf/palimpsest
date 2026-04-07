@@ -1,4 +1,4 @@
-"""Role resolver — loads decorator-based role functions from the evolvable repo."""
+"""Role resolver — loads decorator-based role functions from bundle directories."""
 
 from __future__ import annotations
 
@@ -37,16 +37,6 @@ class JobSpec:
             raise ValueError("JobSpec requires context_fn")
         if self.publication_fn is None:
             raise ValueError("JobSpec requires publication_fn")
-
-
-@dataclass
-class TeamDefinition:
-    name: str
-    description: str
-    roles: list[str] = field(default_factory=list)
-    planner_role: str = "planner"
-    eval_role: str = "evaluator"
-    worker_roles: list[str] = field(default_factory=list)
 
 
 def workspace_config(
@@ -167,7 +157,7 @@ def role(
     *,
     name: str,
     description: str,
-    teams: list[str] | None = None,
+    teams: list[str] | None = None,  # DEPRECATED: ignored per Bundle MVP
     role_type: str = "worker",
     min_cost: float = 0.0,
     recommended_cost: float = 0.0,
@@ -178,12 +168,15 @@ def role(
 
     Per ADR-0007: all arguments must be literal expressions (string/numeric).
     This allows AST-based metadata extraction via RoleMetadataReader.
+    
+    Per Bundle MVP: 'teams' parameter is deprecated and ignored. Role membership
+    is determined by bundle directory location: evo/<bundle>/roles/<name>.py
     """
     def decorator(func: Callable[..., JobSpec]) -> Callable[..., JobSpec]:
         func.__role_metadata__ = RoleMetadata(
             name=name,
             description=description,
-            teams=list(teams or ["default"]),
+            teams=[],  # Deprecated field - empty per Bundle MVP
             role_type=role_type,
             min_cost=min_cost,
             recommended_cost=recommended_cost,
@@ -202,22 +195,21 @@ class RoleManager(RoleMetadataReader):
     - RoleMetadataReader (yoitsu-contracts): AST-based metadata extraction
     - RoleManager (palimpsest): executes role modules to produce JobSpec
 
-    Per ADR-0011 (D2, D7):
-    - Supports two-layer role resolution: team-specific roles shadow global
-    - Resolution order: evo/teams/<team>/roles/<name>.py → evo/roles/<name>.py
+    Per Bundle MVP:
+    - Bundle-only resolution: evo/<bundle>/roles/<name>.py
+    - No global fallback, no team layer
+    - Missing role is a hard error
     """
 
-    def __init__(self, evo_root: str | Path, team: str = "default") -> None:
+    def __init__(self, evo_root: str | Path, bundle: str = "") -> None:
         super().__init__(evo_root)
-        self._team = team
-        self._team_roles_dir = self._root / "teams" / team / "roles"
+        self._bundle = bundle
+        self._bundle_roles_dir = self._root / bundle / "roles" if bundle else None
 
     def resolve(self, role_name: str, **params: Any) -> JobSpec:
         """Load and execute role module to produce JobSpec.
 
-        Per ADR-0011: Uses two-layer resolution:
-        1. evo/teams/<team>/roles/<name>.py (if exists)
-        2. evo/roles/<name>.py (fallback)
+        Per Bundle MVP: Loads from evo/<bundle>/roles/<name>.py only.
         """
         func = self._load_role_function(role_name)
         try:
@@ -230,64 +222,58 @@ class RoleManager(RoleMetadataReader):
         return spec
 
     def get_definition(self, name: str) -> RoleMetadata | None:
-        """Get a specific role definition by name, using two-layer resolution.
+        """Get a specific role definition by name from the bundle.
 
-        Per ADR-0011: Checks team-specific roles first, then falls back to global.
+        Per Bundle MVP: Only looks in evo/<bundle>/roles/.
         """
-        # Try team-specific first
-        if self._team_roles_dir.exists():
-            team_path = self._team_roles_dir / f"{name}.py"
-            if team_path.exists():
-                meta = self._read_role_file(team_path)
-                if meta:
-                    return meta
-
-        # Fallback to global
-        return super().get_definition(name)
+        if not self._bundle_roles_dir:
+            return None
+            
+        bundle_path = self._bundle_roles_dir / f"{name}.py"
+        if bundle_path.exists():
+            return self._read_role_file(bundle_path)
+        return None
 
     def list_roles(self) -> list[str]:
         return [meta.name for meta in self.list_definitions()]
 
     def list_definitions(self) -> list[RoleMetadata]:
-        """List all role definitions, merging team-specific with global.
+        """List all role definitions in the bundle.
 
-        Per ADR-0011: Team-specific roles shadow global roles with same name.
+        Per Bundle MVP: Only scans evo/<bundle>/roles/.
         """
-        # Start with global roles
-        global_roles = super().list_definitions()
-        global_by_name = {meta.name: meta for meta in global_roles}
-
-        # Add/override with team-specific roles
-        if self._team_roles_dir.exists():
-            for py_path in sorted(self._team_roles_dir.glob("*.py")):
-                if py_path.name.startswith("_"):
-                    continue
-                meta = self._read_role_file(py_path)
-                if meta:
-                    global_by_name[meta.name] = meta
-
-        return list(global_by_name.values())
+        if not self._bundle_roles_dir or not self._bundle_roles_dir.exists():
+            return []
+            
+        result: list[RoleMetadata] = []
+        for py_path in sorted(self._bundle_roles_dir.glob("*.py")):
+            if py_path.name.startswith("_"):
+                continue
+            meta = self._read_role_file(py_path)
+            if meta:
+                result.append(meta)
+        return result
 
     def _load_role_function(self, name: str) -> Callable[..., JobSpec]:
         func, _ = self._load_role_by_name(name)
         return func
 
     def _load_role_by_name(self, name: str) -> tuple[Callable[..., JobSpec], RoleMetadata]:
-        """Load role module using two-layer resolution.
+        """Load role module from bundle directory.
 
-        Per ADR-0011: Checks team-specific first, then falls back to global.
+        Per Bundle MVP: Only looks in evo/<bundle>/roles/<name>.py.
+        Raises FileNotFoundError if not found.
         """
-        # Try team-specific first
-        if self._team_roles_dir.exists():
-            team_path = self._team_roles_dir / f"{name}.py"
-            if team_path.exists():
-                return self._load_role_module(team_path, expected_name=name)
-
-        # Fallback to global
-        py_path = self._root / "roles" / f"{name}.py"
-        if not py_path.exists():
-            raise FileNotFoundError(f"Role definition not found: {name} (expected {py_path})")
-        return self._load_role_module(py_path, expected_name=name)
+        if not self._bundle_roles_dir:
+            raise ValueError("bundle parameter is required for role resolution")
+        
+        bundle_path = self._bundle_roles_dir / f"{name}.py"
+        if not bundle_path.exists():
+            raise FileNotFoundError(
+                f"Role '{name}' not found in bundle '{self._bundle}' "
+                f"(expected {bundle_path})"
+            )
+        return self._load_role_module(bundle_path, expected_name=name)
 
     def _load_role_module(
         self,
@@ -317,70 +303,3 @@ class RoleManager(RoleMetadataReader):
                 return attr, meta
 
         raise ValueError(f"No @role-decorated function found in {py_path}")
-
-class TeamManager:
-    """Manages team definitions using directory-based membership (ADR-0011 D7).
-    
-    Per ADR-0011: Team membership is determined by directory location:
-    - evo/teams/<team>/roles/*.py are team-specific roles
-    - evo/roles/*.py are global roles (available to all teams)
-    """
-    def __init__(self, evo_root: str | Path, team: str = "default"):
-        self._root = Path(evo_root)
-        self._team = team
-        self._roles = RoleManager(evo_root, team=team)
-
-    def list_teams(self) -> list[str]:
-        """List all teams from directory structure and role metadata.
-        
-        Per ADR-0011 D7: Teams are discovered from:
-        1. evo/teams/<team>/roles/*.py directory structure
-        2. Role metadata teams field (for backwards compat)
-        """
-        # Discover from directory structure
-        teams_dir = self._root / "teams"
-        dir_teams = set()
-        if teams_dir.exists():
-            for team_dir in teams_dir.iterdir():
-                if team_dir.is_dir() and not team_dir.name.startswith("_"):
-                    roles_dir = team_dir / "roles"
-                    if roles_dir.exists() and any(roles_dir.glob("*.py")):
-                        dir_teams.add(team_dir.name)
-        
-        # Also include teams from role metadata (backwards compat)
-        meta_teams = {team for meta in self._roles.list_definitions() for team in meta.teams}
-        
-        return sorted(dir_teams | meta_teams)
-
-    def resolve(self, name: str) -> TeamDefinition:
-        """Resolve a team definition by name.
-        
-        Per ADR-0011 D7: Uses directory-based membership via RoleManager.
-        Roles are discovered from evo/teams/<name>/roles/*.py + evo/roles/*.py.
-        """
-        team_name = (name or "default").strip() or "default"
-        # Use RoleManager with the specific team for directory-based resolution
-        roles = RoleManager(self._root, team=team_name)
-        members = roles.list_definitions()
-        if not members:
-            raise FileNotFoundError(f"No roles found for team {team_name!r}")
-
-        planners = [meta.name for meta in members if meta.role_type == "planner"]
-        evaluators = [meta.name for meta in members if meta.role_type == "evaluator"]
-        workers = [meta.name for meta in members if meta.role_type == "worker"]
-
-        if len(planners) != 1:
-            raise ValueError(f"Team {team_name!r} must have exactly one planner role")
-        if len(evaluators) > 1:
-            raise ValueError(f"Team {team_name!r} must have at most one evaluator role")
-        if not workers:
-            raise ValueError(f"Team {team_name!r} must have at least one worker role")
-
-        return TeamDefinition(
-            name=team_name,
-            description=f"Derived team {team_name}",
-            roles=[meta.name for meta in members],
-            planner_role=planners[0],
-            eval_role=evaluators[0] if evaluators else "evaluator",
-            worker_roles=workers,
-        )

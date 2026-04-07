@@ -80,7 +80,7 @@ class ControlledJobFailure(Exception):
 def run_job(config: JobConfig) -> None:
     """Resolve the role into a JobSpec and execute the four-stage pipeline."""
     with _materialize_evo_root(config.evo_sha) as (evo_path, resolved_evo_sha):
-        resolver = RoleManager(evo_path, team=config.team)
+        resolver = RoleManager(evo_path, bundle=config.bundle)
         spec = resolver.resolve(config.role, **dict(config.role_params or {}))
 
         logger.info(
@@ -110,7 +110,7 @@ def _run_job_from_spec(
     logger.info(f"Starting job {job_id} (evo={evo_sha[:8] if evo_sha else '?'})")
 
     # Make evo importable as a package root so role/tool/context modules can
-    # `from teams.<team>.lib... import ...` against the materialized evo tree.
+    # `from <bundle>.lib... import ...` against the materialized evo tree.
     # This is the MVP single-bundle bridge; Phase 2 multi-bundle will replace
     # this with per-bundle sys.path injection.
     evo_path_str = str(evo_path)
@@ -123,7 +123,7 @@ def _run_job_from_spec(
     runtime_context = RuntimeContext(
         job_id=job_id,
         task_id=task_id,
-        team=config.team,
+        bundle=config.bundle,
         role=config.role,
     )
 
@@ -186,7 +186,7 @@ def _run_job_from_spec(
         )
 
         # Stage 3+4: Interaction and publication
-        tools = _setup_tools(config, spec, evo_path, evo_sha, gateway, config.team)
+        tools = _setup_tools(config, spec, evo_path, evo_sha, gateway, config.bundle)
         result, git_ref = _stage_interaction_and_publication(
             job_id, context, workspace, config, spec, gateway, tools, llm,
             base_sha=base_sha,
@@ -256,13 +256,13 @@ def _setup_tools(
     evo_path: Path,
     evo_sha: str,
     gateway: EventGateway,
-    team: str,
+    bundle: str,
 ) -> UnifiedToolGateway:
     """Create the unified tool gateway from builtin + evo providers."""
     return UnifiedToolGateway(
         config.tools,
         evo_path,
-        team,
+        bundle,
         spec.tools,
         gateway,
         evo_sha=evo_sha,
@@ -329,7 +329,7 @@ def _stage_interaction_and_publication(
                         job_id=job_id,
                         task_id=config.task_id or job_id,
                         role=runtime_context.role,
-                        team=runtime_context.team,
+                        bundle=runtime_context.bundle,
                         tool_name=r.tool_name,
                         call_count=r.call_count,
                         arg_pattern=r.arg_pattern,
@@ -368,7 +368,7 @@ def _stage_interaction_and_publication(
                         job_id=job_id,
                         task_id=config.task_id or job_id,
                         role=runtime_context.role,
-                        team=runtime_context.team,
+                        bundle=runtime_context.bundle,
                         tool_name=r.tool_name,
                         call_count=r.call_count,
                         arg_pattern=r.arg_pattern,

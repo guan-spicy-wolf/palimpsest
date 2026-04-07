@@ -47,24 +47,23 @@ def _load_context_functions(py_path: Path) -> dict[str, Callable]:
 def resolve_context_functions(
     evo_root: str | Path,
     requested: list[str],
-    team: str = "default",
+    bundle: str = "",
 ) -> dict[str, Callable]:
-    """Scan evo/teams/<team>/contexts/ first, then evo/contexts/ for fallback.
+    """Scan evo/<bundle>/contexts/ for context providers.
     
-    Per Factorio Tool Evolution MVP: team-specific contexts have higher priority.
-    This enables factorio team to have its own context providers (e.g., factorio_scripts).
+    Per Bundle MVP: Only looks in bundle directory, no global fallback.
     """
+    if not bundle:
+        return {}
+        
     requested_set = set(requested)
     result: dict[str, Callable] = {}
     
-    # Scan team-specific first (higher priority)
-    team_dir = Path(evo_root) / "teams" / team / "contexts"
-    global_dir = Path(evo_root) / "contexts"
+    # Scan bundle contexts only
+    bundle_dir = Path(evo_root) / bundle / "contexts"
     
-    for scan_dir in (team_dir, global_dir):
-        if not scan_dir.is_dir():
-            continue
-        for py_file in sorted(scan_dir.glob("*.py")):
+    if bundle_dir.is_dir():
+        for py_file in sorted(bundle_dir.glob("*.py")):
             if py_file.name.startswith("_"):
                 continue
             funcs = _load_context_functions(py_file)
@@ -74,6 +73,6 @@ def resolve_context_functions(
 
     missing = requested_set - set(result.keys())
     if missing:
-        logger.warning(f"Context providers not found: {missing}")
+        logger.warning(f"Context providers not found (bundle={bundle}): {missing}")
 
     return result

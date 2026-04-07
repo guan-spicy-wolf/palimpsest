@@ -144,7 +144,7 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
     - budget
     - repo
     - init_branch
-    - team
+    - bundle
     - params (role-internal flags only)
     - eval_spec
     - sha
@@ -176,7 +176,7 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
     budget = task.get("budget")
     repo = task.get("repo")
     init_branch = task.get("init_branch")
-    team = task.get("team")
+    bundle = task.get("bundle")
     sha = task.get("sha")
     params = task.get("params")
 
@@ -227,7 +227,7 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
         budget=float(budget) if isinstance(budget, (int, float)) else 0.0,
         repo=str(repo or ""),
         init_branch=str(init_branch or ""),
-        team=str(team or "").strip(),
+    bundle=str(bundle or "").strip(),
         sha=sha or None,
         params=params,
         eval_spec=normalized_eval_spec,
@@ -269,9 +269,9 @@ _SPAWN_SCHEMA: dict = {
                                 "type": "string",
                                 "description": "Branch to clone from.",
                             },
-                            "team": {
+                            "bundle": {
                                 "type": "string",
-                                "description": "Team that owns this task. Omit to inherit from parent.",
+                                "description": "Bundle for artifact loading. Omit to inherit from parent.",
                             },
                             "sha": {
                                 "type": "string",
@@ -509,30 +509,29 @@ def _load_tool_functions(py_path: Path) -> dict[str, Callable]:
 
 def resolve_tool_functions(
     evo_root: str | Path,
-    team: str,
+    bundle: str,
     requested: list[str],
 ) -> dict[str, Callable]:
-    """Scan evo/tools/ and evo/teams/<team>/tools/ for requested @tool functions.
+    """Scan evo/<bundle>/tools/ for requested @tool functions.
 
-    Per ADR-0011 D2: team-specific tools shadow global tools of the same name.
+    Per Bundle MVP: Only looks in bundle directory, no global fallback.
 
     Args:
         evo_root: Root directory of the evo repository
-        team: Team name to resolve team-specific tools for
+        bundle: Bundle name to resolve tools for
         requested: List of tool names to resolve
 
     Returns:
         Dict mapping tool names to their callable functions.
-        Team-specific tools override global tools with the same name.
     """
     evo_path = Path(evo_root)
     requested_set = set(requested)
     result: dict[str, Callable] = {}
 
-    # Scan global tools first
-    global_tools_dir = evo_path / "tools"
-    if global_tools_dir.is_dir():
-        for py_file in sorted(global_tools_dir.glob("*.py")):
+    # Scan bundle tools only
+    bundle_tools_dir = evo_path / bundle / "tools"
+    if bundle_tools_dir.is_dir():
+        for py_file in sorted(bundle_tools_dir.glob("*.py")):
             if py_file.name.startswith("_"):
                 continue
             funcs = _load_tool_functions(py_file)
@@ -540,20 +539,9 @@ def resolve_tool_functions(
                 if name in requested_set:
                     result[name] = func
 
-    # Scan team-specific tools (shadow global)
-    team_tools_dir = evo_path / "teams" / team / "tools"
-    if team_tools_dir.is_dir():
-        for py_file in sorted(team_tools_dir.glob("*.py")):
-            if py_file.name.startswith("_"):
-                continue
-            funcs = _load_tool_functions(py_file)
-            for name, func in funcs.items():
-                if name in requested_set:
-                    result[name] = func  # Shadows global
-
     missing = requested_set - set(result.keys())
     if missing:
-        logger.warning(f"Tools not found (team={team}): {missing}")
+        logger.warning(f"Tools not found (bundle={bundle}): {missing}")
 
     return result
 
@@ -582,7 +570,7 @@ class UnifiedToolGateway:
         self,
         config: ToolsConfig,
         evo_root: Path,
-        team: str,
+        bundle: str,
         requested_evo_tools: list[str],
         gateway: EventGateway,
         evo_sha: str = "",
@@ -615,9 +603,9 @@ class UnifiedToolGateway:
             self._functions["spawn"] = spawn
         if "create_pr" not in disabled and ("create_pr" in requested or not requested):
             self._functions["create_pr"] = create_pr
-        # Load evo tools (global + team-specific, team shadows global)
+        # Load evo tools from bundle
         requested_evo = [name for name in requested_evo_tools if name not in BUILTIN_TOOL_NAMES]
-        evo_funcs = resolve_tool_functions(evo_root, team, requested_evo)
+        evo_funcs = resolve_tool_functions(evo_root, bundle, requested_evo)
 
         dups = find_duplicate_tool_names(self._functions, evo_funcs)
         if dups:
