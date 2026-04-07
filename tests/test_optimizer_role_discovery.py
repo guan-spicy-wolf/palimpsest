@@ -1,4 +1,7 @@
-"""Tests for optimizer role discovery via @role decorator."""
+"""Tests for optimizer role discovery via @role decorator (Bundle MVP).
+
+Per Bundle MVP: Roles are discovered from evo/<bundle>/roles/ only.
+"""
 import textwrap
 from pathlib import Path
 
@@ -9,11 +12,12 @@ from palimpsest.runtime.roles import RoleManager
 
 def test_optimizer_role_is_discovered_by_ast(tmp_path):
     """Optimizer role with @role decorator is discoverable via AST scanning."""
-    # Create evo/roles directory with optimizer.py
-    roles_dir = tmp_path / "roles"
-    roles_dir.mkdir()
+    # Create bundle roles directory with optimizer.py
+    roles_dir = tmp_path / "factorio" / "roles"
+    roles_dir.mkdir(parents=True)
     (roles_dir / "optimizer.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.roles import JobSpec, context_spec, role
+        from palimpsest.config import WorkspaceConfig
 
         @role(
             name="optimizer",
@@ -33,7 +37,7 @@ def test_optimizer_role_is_discovered_by_ast(tmp_path):
     """))
 
     # RoleMetadataReader (via RoleManager) should discover it
-    manager = RoleManager(tmp_path)
+    manager = RoleManager(tmp_path, bundle="factorio")
     definitions = manager.list_definitions()
     
     assert len(definitions) == 1
@@ -47,10 +51,11 @@ def test_optimizer_role_is_discovered_by_ast(tmp_path):
 
 def test_role_decorator_required_for_discovery(tmp_path):
     """Role without @role decorator is NOT discovered by AST scanning."""
-    roles_dir = tmp_path / "roles"
-    roles_dir.mkdir()
+    roles_dir = tmp_path / "factorio" / "roles"
+    roles_dir.mkdir(parents=True)
     (roles_dir / "undiscovered.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.roles import JobSpec, context_spec
+        from palimpsest.config import WorkspaceConfig
 
         # Missing @role decorator!
         def some_role(**params) -> JobSpec:
@@ -66,7 +71,7 @@ def test_role_decorator_required_for_discovery(tmp_path):
         some_role.__role_name__ = "some_role"
     """))
 
-    manager = RoleManager(tmp_path)
+    manager = RoleManager(tmp_path, bundle="factorio")
     definitions = manager.list_definitions()
     
     # Should NOT discover this role (no @role decorator)
@@ -75,10 +80,11 @@ def test_role_decorator_required_for_discovery(tmp_path):
 
 def test_role_decorator_literal_args_required(tmp_path):
     """Role decorator args must be literals (not runtime expressions)."""
-    roles_dir = tmp_path / "roles"
-    roles_dir.mkdir()
+    roles_dir = tmp_path / "factorio" / "roles"
+    roles_dir.mkdir(parents=True)
     (roles_dir / "bad_role.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.roles import JobSpec, role
+        from palimpsest.config import WorkspaceConfig
         
         COST = 0.5  # Non-literal
         
@@ -91,7 +97,7 @@ def test_role_decorator_literal_args_required(tmp_path):
             pass
     """))
 
-    manager = RoleManager(tmp_path)
+    manager = RoleManager(tmp_path, bundle="factorio")
     
     # Should raise ValueError when scanning non-literal decorator args
     with pytest.raises(ValueError) as exc_info:
@@ -101,7 +107,7 @@ def test_role_decorator_literal_args_required(tmp_path):
 
 
 def test_factorio_bundle_role_discovery(tmp_path):
-    """Bundle roles in bundles/<bundle>/roles/ are discoverable."""
+    """Bundle roles in evo/<bundle>/roles/ are discoverable."""
     # Create bundle role
     (tmp_path / "factorio" / "roles").mkdir(parents=True)
     (tmp_path / "factorio" / "roles" / "worker.py").write_text(textwrap.dedent("""\
@@ -116,7 +122,7 @@ def test_factorio_bundle_role_discovery(tmp_path):
         def worker(**params) -> JobSpec:
             return JobSpec(
                 preparation_fn=lambda **_: WorkspaceConfig(repo="", new_branch=False),
-                context_fn=context_spec(system="bundles/factorio/prompts/worker.md", sections=[]),
+                context_fn=context_spec(system="prompts/worker.md", sections=[]),
                 publication_fn=lambda **_: (None, []),
                 tools=["factorio_call_script"],
             )
@@ -136,8 +142,8 @@ def test_role_metadata_reader_vs_role_manager():
     
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
-        roles_dir = tmp_path / "roles"
-        roles_dir.mkdir()
+        roles_dir = tmp_path / "factorio" / "roles"
+        roles_dir.mkdir(parents=True)
         (roles_dir / "test_role.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.roles import JobSpec, role, context_spec
             from palimpsest.config import WorkspaceConfig
@@ -160,14 +166,14 @@ def test_role_metadata_reader_vs_role_manager():
         from yoitsu_contracts.role_metadata import RoleMetadataReader
         
         # RoleMetadataReader (AST scan) - used by trenni
-        reader = RoleMetadataReader(tmp_path)
+        reader = RoleMetadataReader(tmp_path, bundle="factorio")
         meta = reader.get_definition("test_role")
         assert meta is not None
         assert meta.name == "test_role"
         assert meta.min_cost == 0.1
         
         # RoleManager (execution) - used by palimpsest
-        manager = RoleManager(tmp_path)
+        manager = RoleManager(tmp_path, bundle="factorio")
         spec = manager.resolve("test_role")
         assert spec is not None
         assert "bash" in spec.tools

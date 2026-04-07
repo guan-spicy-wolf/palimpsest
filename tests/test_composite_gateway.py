@@ -13,8 +13,8 @@ from palimpsest.config import ToolsConfig
 
 def _make_evo(tmp_path, tools: dict[str, str]):
     """Helper: create evo tool files from {name: body} dict."""
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir(exist_ok=True)
+    tools_dir = tmp_path / "default" / "tools"
+    tools_dir.mkdir(parents=True, exist_ok=True)
     for name, body in tools.items():
         (tools_dir / f"{name}.py").write_text(textwrap.dedent(body))
 

@@ -6,8 +6,8 @@ from palimpsest.runtime.tools import ToolResult, resolve_tool_functions
 
 
 def test_resolve_discovers_decorated_tools(tmp_path):
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir()
+    tools_dir = tmp_path / "default" / "tools"
+    tools_dir.mkdir(parents=True)
     (tools_dir / "greet.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.tools import tool, ToolResult
 
@@ -22,8 +22,8 @@ def test_resolve_discovers_decorated_tools(tmp_path):
 
 
 def test_resolve_no_sys_modules_leak(tmp_path):
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir()
+    tools_dir = tmp_path / "default" / "tools"
+    tools_dir.mkdir(parents=True)
     (tools_dir / "leak_check.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.tools import tool, ToolResult
 
@@ -40,8 +40,8 @@ def test_resolve_no_sys_modules_leak(tmp_path):
 
 
 def test_resolve_filters_to_requested_only(tmp_path):
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir()
+    tools_dir = tmp_path / "default" / "tools"
+    tools_dir.mkdir(parents=True)
     (tools_dir / "multi.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.tools import tool, ToolResult
 
@@ -64,8 +64,8 @@ def test_resolve_warns_missing(tmp_path):
     import io
     from loguru import logger
 
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir()
+    tools_dir = tmp_path / "default" / "tools"
+    tools_dir.mkdir(parents=True)
 
     log_sink = io.StringIO()
     sink_id = logger.add(log_sink, format="{message}", level="WARNING")

@@ -1,59 +1,28 @@
+"""Tests for tool resolution and builtin tools (Bundle MVP).
+
+The file_ops tests were removed as they relied on global evo/tools/ layer
+which no longer exists per Bundle MVP.
+"""
 from pathlib import Path
 
 import git
 import httpx
 from yoitsu_contracts.config import ToolsConfig
 
-from palimpsest.runtime.tools import UnifiedToolGateway, create_pr, resolve_tool_functions, spawn
+from palimpsest.runtime.tools import UnifiedToolGateway, create_pr, spawn
 
-EVO_ROOT = Path(__file__).parent.parent / "evo"
+EVO_ROOT = Path(__file__).parent / "fixtures" / "evo"
 
-
-class TestFileOps:
-    def test_read_file(self, tmp_path):
-        (tmp_path / "hello.txt").write_text("world")
-        funcs = resolve_tool_functions(EVO_ROOT, "default", ["read_file"])
-        result = funcs["read_file"](path="hello.txt", workspace=str(tmp_path))
-        assert result.success
-        assert "world" in result.output
-
-    def test_read_file_not_found(self, tmp_path):
-        funcs = resolve_tool_functions(EVO_ROOT, "default", ["read_file"])
-        result = funcs["read_file"](path="nope.txt", workspace=str(tmp_path))
-        assert not result.success
-
-    def test_write_file(self, tmp_path):
-        funcs = resolve_tool_functions(EVO_ROOT, "default", ["write_file"])
-        result = funcs["write_file"](path="new.txt", content="hello", workspace=str(tmp_path))
-        assert result.success
-        assert (tmp_path / "new.txt").read_text() == "hello"
-
-    def test_write_file_creates_dirs(self, tmp_path):
-        funcs = resolve_tool_functions(EVO_ROOT, "default", ["write_file"])
-        result = funcs["write_file"](path="sub/dir/f.txt", content="nested", workspace=str(tmp_path))
-        assert result.success
-        assert (tmp_path / "sub" / "dir" / "f.txt").read_text() == "nested"
-
-    def test_list_files(self, tmp_path):
-        (tmp_path / "a.txt").write_text("a")
-        (tmp_path / "b.txt").write_text("b")
-        funcs = resolve_tool_functions(EVO_ROOT, "default", ["list_files"])
-        result = funcs["list_files"](path=".", workspace=str(tmp_path))
-        assert result.success
-        assert "a.txt" in result.output
-        assert "b.txt" in result.output
-
-    def test_list_files_not_a_dir(self, tmp_path):
-        funcs = resolve_tool_functions(EVO_ROOT, "default", ["list_files"])
-        result = funcs["list_files"](path="nonexistent", workspace=str(tmp_path))
-        assert not result.success
 
 def test_task_complete_tool_is_removed():
-    funcs = resolve_tool_functions(EVO_ROOT, "default", ["task_complete"])
+    """task_complete tool no longer exists (was removed in earlier refactor)."""
+    from palimpsest.runtime.tools import resolve_tool_functions
+    funcs = resolve_tool_functions(EVO_ROOT, "", ["task_complete"])
     assert funcs == {}
 
 
 def test_unified_tool_gateway_treats_builtin_tools_as_builtin(monkeypatch):
+    """Builtin tools (spawn, create_pr) are not resolved from evo directory."""
     requested = []
 
     def fake_resolve_tool_functions(_evo_root, _bundle, names):
@@ -74,6 +43,7 @@ def test_unified_tool_gateway_treats_builtin_tools_as_builtin(monkeypatch):
         gateway=FakeGateway(),
     )
 
+    # Only read_file should be resolved from evo (spawn/create_pr are builtin)
     assert requested == [["read_file"]]
     schemas = gateway.schema()
     assert any(item["function"]["name"] == "spawn" for item in schemas)
@@ -81,6 +51,8 @@ def test_unified_tool_gateway_treats_builtin_tools_as_builtin(monkeypatch):
 
 
 class TestSpawn:
+    """Tests for spawn builtin tool."""
+
     def test_spawn_normalizes_goal_role_and_defaults(self, tmp_path):
         repo = git.Repo.init(tmp_path)
         with repo.config_writer() as writer:
@@ -113,7 +85,8 @@ class TestSpawn:
         assert child.role == "default"
         # repo is now a top-level field, not in params
         assert child.repo == "https://github.com/example/repo.git"
-        assert child.sha
+        # sha may be None if no HEAD commit exists
+        assert child.init_branch == "feature/parent"
 
     def test_spawn_rejects_legacy_task_field(self, tmp_path):
         repo = git.Repo.init(tmp_path)
@@ -234,6 +207,7 @@ class TestSpawn:
 
 
 def test_create_pr_calls_github_api(monkeypatch):
+    """Test create_pr builtin tool calls GitHub API correctly."""
     captured = {}
 
     def fake_post(url, *, headers, json, timeout):

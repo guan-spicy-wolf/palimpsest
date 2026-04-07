@@ -11,8 +11,8 @@ from palimpsest.config import ToolsConfig
 
 
 def test_resolve_tool_functions_discovers_decorated(tmp_path):
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir()
+    tools_dir = tmp_path / "default" / "tools"
+    tools_dir.mkdir(parents=True)
     (tools_dir / "echo.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.tools import tool, ToolResult
 
@@ -28,8 +28,8 @@ def test_resolve_tool_functions_discovers_decorated(tmp_path):
 
 
 def test_unified_gateway_with_evo_tools(tmp_path):
-    tools_dir = tmp_path / "tools"
-    tools_dir.mkdir()
+    tools_dir = tmp_path / "default" / "tools"
+    tools_dir.mkdir(parents=True)
     (tools_dir / "echo.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.tools import tool, ToolResult
 

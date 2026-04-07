@@ -10,6 +10,6 @@ def test_runtime_context_has_bundle_field():
 
 
 def test_runtime_context_bundle_defaults_empty():
-    """RuntimeContext bundle defaults to 'default'."""
+    """RuntimeContext bundle defaults to empty string (must be explicit)."""
     ctx = RuntimeContext()
-    assert ctx.bundle == "default"
+    assert ctx.bundle == ""
