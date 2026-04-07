@@ -78,8 +78,9 @@ def build_context(
             logger.warning(f"No provider for context section type: {section_type!r}")
 
     explicit_task = str(context_spec.get("task", "") or task)
-    if explicit_task and not parts:
-        parts.append(explicit_task)
+    # Always include the goal as the first part, then append sections
+    if explicit_task:
+        parts.insert(0, explicit_task)
     task_message = "\n\n".join(parts)
     logger.info(f"Built context for job {job_id}")
     return {"system": system_prompt, "task": task_message}
