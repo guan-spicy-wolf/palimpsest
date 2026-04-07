@@ -4,7 +4,7 @@ from pathlib import Path
 
 from palimpsest.config import JobConfig
 from palimpsest.runtime.contexts import resolve_context_functions
-from palimpsest.runtime.roles import RoleManager, TeamManager, role, RoleMetadata
+from palimpsest.runtime.roles import RoleManager, RoleManager, role, RoleMetadata
 
 EVO_ROOT = Path(__file__).parent.parent / "evo"  # NOTE: tests/fixtures/evo used by optimizer_role_discovery tests
 
@@ -74,7 +74,7 @@ def test_planner_initial_mode_uses_initial_context():
 
 
 def test_team_manager_loads_team_definition():
-    team = TeamManager(EVO_ROOT).resolve("backend")
+    team = RoleManager(EVO_ROOT).resolve("backend")
     assert team.planner_role == "planner"
     assert team.eval_role == "evaluator"
     assert "implementer" in team.roles
@@ -84,7 +84,7 @@ def test_available_roles_context_is_scoped_to_team():
     funcs = resolve_context_functions(EVO_ROOT, ["available_roles"])
     rendered = funcs["available_roles"](
         evo_root=str(EVO_ROOT),
-        job_config=JobConfig(team="backend"),
+        job_config=JobConfig(bundle="backend"),
     )
     assert "Team: backend" in rendered
     assert "implementer" in rendered
@@ -93,7 +93,7 @@ def test_available_roles_context_is_scoped_to_team():
 
 def test_available_roles_degrades_missing_role():
     funcs = resolve_context_functions(EVO_ROOT, ["available_roles"])
-    original_resolve = TeamManager.resolve
+    original_resolve = RoleManager.resolve
 
     def fake_resolve(self, name):
         return SimpleNamespace(
@@ -104,14 +104,14 @@ def test_available_roles_degrades_missing_role():
             eval_role="evaluator",
         )
 
-    TeamManager.resolve = fake_resolve
+    RoleManager.resolve = fake_resolve
     try:
         rendered = funcs["available_roles"](
             evo_root=str(EVO_ROOT),
             job_config=JobConfig(team="broken"),
         )
     finally:
-        TeamManager.resolve = original_resolve
+        RoleManager.resolve = original_resolve
     assert "missing-role" in rendered
     assert "[Unavailable role definition:" in rendered
 

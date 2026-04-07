@@ -1,4 +1,4 @@
-"""Factorio-specific worker role - shadows global worker for factorio team."""
+"""Factorio-specific worker role - shadows global worker for factorio bundle."""
 
 from palimpsest.runtime.roles import role, JobSpec, context_spec, workspace_config
 
@@ -45,7 +45,7 @@ factorio_publication.__publication_strategy__ = "skip"  # Factorio doesn't use g
 def worker(**params):
     """Factorio team worker role definition.
 
-    This shadows the global worker role for factorio team.
+    This shadows the global worker role for factorio bundle.
     Uses runtime_context for RCON connection lifecycle.
     """
     return JobSpec(

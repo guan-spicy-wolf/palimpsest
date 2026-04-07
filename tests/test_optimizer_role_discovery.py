@@ -100,11 +100,11 @@ def test_role_decorator_literal_args_required(tmp_path):
     assert "literal" in str(exc_info.value).lower()
 
 
-def test_factorio_team_role_discovery(tmp_path):
-    """Team-specific roles in teams/<team>/roles/ are discoverable."""
-    # Create team-specific role
-    (tmp_path / "teams" / "factorio" / "roles").mkdir(parents=True)
-    (tmp_path / "teams" / "factorio" / "roles" / "worker.py").write_text(textwrap.dedent("""\
+def test_factorio_bundle_role_discovery(tmp_path):
+    """Bundle roles in bundles/<bundle>/roles/ are discoverable."""
+    # Create bundle role
+    (tmp_path / "factorio" / "roles").mkdir(parents=True)
+    (tmp_path / "factorio" / "roles" / "worker.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.roles import JobSpec, role, context_spec
         from palimpsest.config import WorkspaceConfig
         
@@ -116,14 +116,14 @@ def test_factorio_team_role_discovery(tmp_path):
         def worker(**params) -> JobSpec:
             return JobSpec(
                 preparation_fn=lambda **_: WorkspaceConfig(repo="", new_branch=False),
-                context_fn=context_spec(system="teams/factorio/prompts/worker.md", sections=[]),
+                context_fn=context_spec(system="bundles/factorio/prompts/worker.md", sections=[]),
                 publication_fn=lambda **_: (None, []),
                 tools=["factorio_call_script"],
             )
     """))
 
-    # RoleManager for factorio team should find the worker role
-    manager = RoleManager(tmp_path, team="factorio")
+    # RoleManager for factorio bundle should find the worker role
+    manager = RoleManager(tmp_path, bundle="factorio")
     definitions = manager.list_definitions()
     
     assert len(definitions) == 1

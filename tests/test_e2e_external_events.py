@@ -34,7 +34,7 @@ class TestE2EExternalEventFlow:
             head_branch="feature/new",
             base_branch="main",
             author="developer",
-            team="backend",
+            bundle="backend",
             budget=0.5,
         )
 
@@ -50,7 +50,7 @@ class TestE2EExternalEventFlow:
         assert trigger.role == "reviewer"
         assert trigger.repo == "owner/repo"
         assert trigger.init_branch == "feature/new"
-        assert trigger.team == "backend"
+        assert trigger.bundle == "backend"
         assert trigger.budget == 0.5
 
         # Step 4: Validate GitHub context in params
@@ -71,7 +71,7 @@ class TestE2EExternalEventFlow:
             title="Bug in feature X",
             body="Detailed description",
             author="reporter",
-            team="default",
+            bundle="",
             budget=0.3,
         )
 
@@ -86,7 +86,7 @@ class TestE2EExternalEventFlow:
         assert "Bug in feature X" in trigger.goal
         assert trigger.role == "reviewer"
         assert trigger.repo == "owner/repo"
-        assert trigger.team == "default"
+        assert trigger.bundle == "default"
 
         # Step 4: Validate GitHub context
         assert "github_context" in trigger.params
@@ -195,7 +195,7 @@ class TestE2EExternalEventFlow:
             commit_sha="abc123",
             workflow="CI",
             message="Tests failed",
-            team="backend",
+            bundle="backend",
             budget=1.0,
         )
 
@@ -207,7 +207,7 @@ class TestE2EExternalEventFlow:
         assert trigger.repo == "owner/repo"
         assert trigger.init_branch == "main"
         assert trigger.sha == "abc123"
-        assert trigger.team == "backend"
+        assert trigger.bundle == "backend"
         assert trigger.budget == 1.0
 
 

@@ -28,7 +28,7 @@ def test_tool_receives_runtime_context_via_injection():
 
     @tool
     def probe(runtime_context: RuntimeContext) -> str:
-        received.append(runtime_context.team)
+        received.append(runtime_context.bundle)
         return "ok"
 
     # Verify runtime_context NOT in schema
@@ -46,7 +46,7 @@ def test_tool_receives_runtime_context_via_injection():
         gateway = UnifiedToolGateway(
             config=config,
             evo_root=evo_root,
-            team="default",
+            bundle="",
             requested_evo_tools=[],
             gateway=event_gateway,
         )
@@ -56,7 +56,7 @@ def test_tool_receives_runtime_context_via_injection():
         gateway._schemas.append(probe.__tool_schema__)
 
         # Execute with injection
-        ctx = RuntimeContext(team="factorio")
+        ctx = RuntimeContext(bundle="factorio")
         result = gateway.execute("probe", "call-1", {}, "/tmp/ws", runtime_context=ctx)
         assert result.success
         assert received == ["factorio"]
@@ -99,7 +99,7 @@ def test_execute_accepts_runtime_context_parameter():
         gateway = UnifiedToolGateway(
             config=config,
             evo_root=evo_root,
-            team="default",
+            bundle="",
             requested_evo_tools=[],
             gateway=event_gateway,
         )
@@ -132,7 +132,7 @@ def test_tool_without_runtime_context_still_works():
         gateway = UnifiedToolGateway(
             config=config,
             evo_root=evo_root,
-            team="default",
+            bundle="",
             requested_evo_tools=[],
             gateway=event_gateway,
         )

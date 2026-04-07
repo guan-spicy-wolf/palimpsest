@@ -1,6 +1,6 @@
-"""Tests for two-layer tool resolution (global + team-specific).
+"""Tests for two-layer tool resolution (global + bundle-specific).
 
-Per ADR-0011 D2: team-specific tools shadow global tools of the same name.
+Per ADR-0011 D2: bundle-specific tools shadow global tools of the same name.
 """
 import textwrap
 from pathlib import Path
@@ -17,7 +17,7 @@ from palimpsest.config import ToolsConfig
 
 
 class TestResolveToolFunctionsTwoLayer:
-    """Tests for resolve_tool_functions with team parameter."""
+    """Tests for resolve_tool_functions with bundle parameter."""
 
     def test_finds_global_tools(self, tmp_path: Path) -> None:
         """Global tools in evo/tools/ are discovered."""
@@ -38,25 +38,25 @@ class TestResolveToolFunctionsTwoLayer:
         assert result.output == "hello"
 
     def test_finds_team_specific_tools(self, tmp_path: Path) -> None:
-        """Team-specific tools in evo/teams/<team>/tools/ are discovered."""
-        # Create team-specific tools directory
-        team_tools_dir = tmp_path / "teams" / "alpha" / "tools"
-        team_tools_dir.mkdir(parents=True)
-        (team_tools_dir / "team_tool.py").write_text(textwrap.dedent("""\
+        """Team-specific tools in evo/bundles/<bundle>/tools/ are discovered."""
+        # Create bundle-specific tools directory
+        bundle_tools_dir = tmp_path / "teams" / "alpha" / "tools"
+        bundle_tools_dir.mkdir(parents=True)
+        (bundle_tools_dir / "bundle_tool.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
-            def team_tool(msg: str) -> ToolResult:
-                \"\"\"A team-specific tool.\"\"\"
+            def bundle_tool(msg: str) -> ToolResult:
+                \"\"\"A bundle-specific tool.\"\"\"
                 return ToolResult(success=True, output=f"team: {msg}")
         """))
 
-        funcs = resolve_tool_functions(tmp_path, "alpha", ["team_tool"])
-        assert "team_tool" in funcs
-        result = funcs["team_tool"](msg="hello")
+        funcs = resolve_tool_functions(tmp_path, "alpha", ["bundle_tool"])
+        assert "bundle_tool" in funcs
+        result = funcs["bundle_tool"](msg="hello")
         assert result.output == "team: hello"
 
-    def test_team_tool_shadows_global_tool(self, tmp_path: Path) -> None:
+    def test_bundle_tool_shadows_global_tool(self, tmp_path: Path) -> None:
         """Team-specific tool shadows global tool of the same name (ADR-0011 D2)."""
         # Create global tool
         tools_dir = tmp_path / "tools"
@@ -70,10 +70,10 @@ class TestResolveToolFunctionsTwoLayer:
                 return ToolResult(success=True, output=f"global: {msg}")
         """))
 
-        # Create team-specific tool with same name
-        team_tools_dir = tmp_path / "teams" / "alpha" / "tools"
-        team_tools_dir.mkdir(parents=True)
-        (team_tools_dir / "echo.py").write_text(textwrap.dedent("""\
+        # Create bundle-specific tool with same name
+        bundle_tools_dir = tmp_path / "teams" / "alpha" / "tools"
+        bundle_tools_dir.mkdir(parents=True)
+        (bundle_tools_dir / "echo.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
@@ -84,11 +84,11 @@ class TestResolveToolFunctionsTwoLayer:
 
         funcs = resolve_tool_functions(tmp_path, "alpha", ["echo"])
         assert "echo" in funcs
-        # Should be team-specific, not global
+        # Should be bundle-specific, not global
         result = funcs["echo"](msg="hello")
         assert result.output == "team-alpha: hello"
 
-    def test_global_and_team_tools_both_available(self, tmp_path: Path) -> None:
+    def test_global_and_bundle_tools_both_available(self, tmp_path: Path) -> None:
         """Both global and team tools are available when they have different names."""
         # Create global tool
         tools_dir = tmp_path / "tools"
@@ -102,25 +102,25 @@ class TestResolveToolFunctionsTwoLayer:
                 return ToolResult(success=True, output=f"global: {msg}")
         """))
 
-        # Create team-specific tool with different name
-        team_tools_dir = tmp_path / "teams" / "beta" / "tools"
-        team_tools_dir.mkdir(parents=True)
-        (team_tools_dir / "team_tool.py").write_text(textwrap.dedent("""\
+        # Create bundle-specific tool with different name
+        bundle_tools_dir = tmp_path / "teams" / "beta" / "tools"
+        bundle_tools_dir.mkdir(parents=True)
+        (bundle_tools_dir / "bundle_tool.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
-            def team_tool(msg: str) -> ToolResult:
-                \"\"\"A team-specific tool.\"\"\"
+            def bundle_tool(msg: str) -> ToolResult:
+                \"\"\"A bundle-specific tool.\"\"\"
                 return ToolResult(success=True, output=f"team-beta: {msg}")
         """))
 
-        funcs = resolve_tool_functions(tmp_path, "beta", ["global_tool", "team_tool"])
+        funcs = resolve_tool_functions(tmp_path, "beta", ["global_tool", "bundle_tool"])
         assert "global_tool" in funcs
-        assert "team_tool" in funcs
+        assert "bundle_tool" in funcs
         assert funcs["global_tool"](msg="x").output == "global: x"
-        assert funcs["team_tool"](msg="y").output == "team-beta: y"
+        assert funcs["bundle_tool"](msg="y").output == "team-beta: y"
 
-    def test_no_team_tools_dir_falls_back_to_global(self, tmp_path: Path) -> None:
+    def test_no_bundle_tools_dir_falls_back_to_global(self, tmp_path: Path) -> None:
         """If team has no tools directory, falls back to global tools."""
         # Create global tool
         tools_dir = tmp_path / "tools"
@@ -140,13 +140,13 @@ class TestResolveToolFunctionsTwoLayer:
         result = funcs["fallback"](msg="test")
         assert result.output == "fallback: test"
 
-    def test_no_global_tools_dir_still_finds_team_tools(self, tmp_path: Path) -> None:
+    def test_no_global_tools_dir_still_finds_bundle_tools(self, tmp_path: Path) -> None:
         """If no global tools directory, team tools still work."""
         # No global tools directory
-        # Create team-specific tools
-        team_tools_dir = tmp_path / "teams" / "delta" / "tools"
-        team_tools_dir.mkdir(parents=True)
-        (team_tools_dir / "only_team.py").write_text(textwrap.dedent("""\
+        # Create bundle-specific tools
+        bundle_tools_dir = tmp_path / "teams" / "delta" / "tools"
+        bundle_tools_dir.mkdir(parents=True)
+        (bundle_tools_dir / "only_team.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
@@ -193,14 +193,14 @@ class TestResolveToolFunctionsTwoLayer:
 
 
 class TestUnifiedToolGatewayWithTeam:
-    """Tests for UnifiedToolGateway with team parameter."""
+    """Tests for UnifiedToolGateway with bundle parameter."""
 
-    def test_gateway_loads_team_tools(self, tmp_path: Path) -> None:
-        """UnifiedToolGateway loads team-specific tools."""
-        # Create team-specific tool
-        team_tools_dir = tmp_path / "teams" / "engineering" / "tools"
-        team_tools_dir.mkdir(parents=True)
-        (team_tools_dir / "deploy.py").write_text(textwrap.dedent("""\
+    def test_gateway_loads_bundle_tools(self, tmp_path: Path) -> None:
+        """UnifiedToolGateway loads bundle-specific tools."""
+        # Create bundle-specific tool
+        bundle_tools_dir = tmp_path / "teams" / "engineering" / "tools"
+        bundle_tools_dir.mkdir(parents=True)
+        (bundle_tools_dir / "deploy.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
@@ -214,7 +214,7 @@ class TestUnifiedToolGatewayWithTeam:
         gw = UnifiedToolGateway(
             config,
             tmp_path,
-            "engineering",  # team parameter
+            "engineering",  # bundle parameter
             ["deploy"],
             gateway,
         )
@@ -222,7 +222,7 @@ class TestUnifiedToolGatewayWithTeam:
         names = [schema["function"]["name"] for schema in schemas]
         assert "deploy" in names
 
-    def test_gateway_team_tool_shadows_global(self, tmp_path: Path) -> None:
+    def test_gateway_bundle_tool_shadows_global(self, tmp_path: Path) -> None:
         """Team-specific tool shadows global in UnifiedToolGateway."""
         # Create global tool
         tools_dir = tmp_path / "tools"
@@ -236,10 +236,10 @@ class TestUnifiedToolGatewayWithTeam:
                 return ToolResult(success=True, output=f"global build: {target}")
         """))
 
-        # Create team-specific tool with same name
-        team_tools_dir = tmp_path / "teams" / "special" / "tools"
-        team_tools_dir.mkdir(parents=True)
-        (team_tools_dir / "build.py").write_text(textwrap.dedent("""\
+        # Create bundle-specific tool with same name
+        bundle_tools_dir = tmp_path / "teams" / "special" / "tools"
+        bundle_tools_dir.mkdir(parents=True)
+        (bundle_tools_dir / "build.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
@@ -253,12 +253,12 @@ class TestUnifiedToolGatewayWithTeam:
         gw = UnifiedToolGateway(
             config,
             tmp_path,
-            "special",  # team parameter
+            "special",  # bundle parameter
             ["build"],
             gateway,
         )
 
-        # Execute should use team-specific version
+        # Execute should use bundle-specific version
         result = gw.execute("build", "call-1", {"target": "prod"}, "/workspace")
         assert result.success
-        assert "team build" in result.output
+        assert "bundle build" in result.output

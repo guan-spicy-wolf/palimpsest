@@ -80,7 +80,7 @@ def test_runner_creates_runtime_context(tmp_path):
     """Runner creates RuntimeContext with correct job_id, task_id, and team."""
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-123", task="do work", role="test-role")
-    config.team = "factorio"
+    config.bundle = "factorio"
     spec = _spec()
 
     captured = {}
@@ -111,7 +111,7 @@ def test_runner_creates_runtime_context(tmp_path):
     assert isinstance(ctx, RuntimeContext)
     assert ctx.job_id == "job-123"
     assert ctx.task_id == "job-123"  # task_id defaults to job_id
-    assert ctx.team == "factorio"
+    assert ctx.bundle == "factorio"
 
 
 def test_runner_sets_workspace_path_on_context(tmp_path):
@@ -165,7 +165,7 @@ def test_runner_passes_runtime_context_to_tool_gateway(tmp_path):
     """Runner passes RuntimeContext to tool gateway execution."""
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-789", task="test tools")
-    config.team = "test-team"
+    config.bundle = "test-team"
     spec = _spec()
 
     captured_args = {}
@@ -195,7 +195,7 @@ def test_runner_passes_runtime_context_to_publication_fn(tmp_path):
     """Runner passes RuntimeContext to publication_fn."""
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-pub", task="publish test")
-    config.team = "pub-team"
+    config.bundle = "pub-team"
 
     captured = {}
     def capture_pub(runtime_context=None, **params):
@@ -225,7 +225,7 @@ def test_runner_passes_runtime_context_to_publication_fn(tmp_path):
     ctx = captured["runtime_context"]
     assert isinstance(ctx, RuntimeContext)
     assert ctx.job_id == "job-pub"
-    assert ctx.team == "pub-team"
+    assert ctx.bundle == "pub-team"
     assert ctx.workspace_path == str(tmp_path)
 
 

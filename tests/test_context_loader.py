@@ -40,7 +40,7 @@ def test_resolve_context_ignores_unrequested(tmp_path):
     assert "b" not in registry
 
 
-def test_team_context_overrides_global(tmp_path):
+def test_bundle_context_resolution(tmp_path):
     """Team-specific context provider has higher priority than global."""
     # Create global context
     (tmp_path / "contexts").mkdir()
@@ -52,28 +52,28 @@ def test_team_context_overrides_global(tmp_path):
             return "global"
     """))
     
-    # Create team-specific context
-    (tmp_path / "teams" / "factorio" / "contexts").mkdir(parents=True)
-    (tmp_path / "teams" / "factorio" / "contexts" / "test.py").write_text(textwrap.dedent("""\
+    # Create bundle-specific context
+    (tmp_path / "factorio" / "contexts").mkdir(parents=True)
+    (tmp_path / "factorio" / "contexts" / "test.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.contexts import context_provider
 
         @context_provider("foo")
         def foo(**_) -> str:
-            return "team"
+            return "bundle"
     """))
     
     # Team context should be prioritized
-    result = resolve_context_functions(tmp_path, ["foo"], team="factorio")
+    result = resolve_context_functions(tmp_path, ["foo"], bundle="factorio")
     assert "foo" in result
-    assert result["foo"]() == "team"  # team version wins
+    assert result["foo"]() == "bundle"  # bundle version wins
     
-    # Default team uses global
-    result_default = resolve_context_functions(tmp_path, ["foo"], team="default")
+    # Default bundle uses global
+    result_default = resolve_context_functions(tmp_path, ["foo"], bundle="")
     assert result_default["foo"]() == "global"
 
 
-def test_team_context_fallback_to_global(tmp_path):
-    """When team context doesn't have requested provider, fall back to global."""
+def test_bundle_context_fallback(tmp_path):
+    """When bundle context doesn't have requested provider, fall back to global."""
     # Create global context only
     (tmp_path / "contexts").mkdir()
     (tmp_path / "contexts" / "global.py").write_text(textwrap.dedent("""\
@@ -85,9 +85,9 @@ def test_team_context_fallback_to_global(tmp_path):
     """))
     
     # Team without its own context
-    (tmp_path / "teams" / "factorio").mkdir(parents=True)
-    # No contexts subdirectory for factorio team
+    (tmp_path / "factorio").mkdir(parents=True)
+    # No contexts subdirectory for factorio bundle
     
-    result = resolve_context_functions(tmp_path, ["shared"], team="factorio")
+    result = resolve_context_functions(tmp_path, ["shared"], bundle="factorio")
     assert "shared" in result
     assert result["shared"]() == "global_shared"  # fallback to global

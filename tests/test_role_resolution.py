@@ -1,9 +1,10 @@
-"""Tests for two-layer role resolution (ADR-0011 D2, D7).
+"""Tests for bundle-based role resolution (Bundle MVP).
 
 Resolution rules:
-1. If evo/teams/<team>/roles/<name>.py exists → use it
-2. Else if evo/roles/<name>.py exists → use it
-3. Else → raise FileNotFoundError
+1. If evo/<bundle>/roles/<name>.py exists → use it
+2. Else → raise FileNotFoundError
+
+No global fallback, no team layer.
 """
 
 from pathlib import Path
@@ -14,62 +15,26 @@ from palimpsest.runtime.roles import RoleManager
 
 
 @pytest.fixture
-def evo_with_layers(tmp_path: Path) -> Path:
-    """Create a two-layer evo structure for testing.
+def evo_with_bundle(tmp_path: Path) -> Path:
+    """Create a bundle-based evo structure for testing.
 
     Structure:
     evo/
-      roles/
-        worker.py          # Global role
-        planner.py         # Global role
-      teams/
-        factorio/
-          roles/
-            worker.py      # Team-specific role (shadows global)
-        alpha/
-          roles/
-            specialist.py  # Team-specific only
+      factorio/
+        roles/
+          worker.py      # Factorio bundle role
     """
     evo_root = tmp_path / "evo"
     evo_root.mkdir()
 
-    # Global roles
-    roles_dir = evo_root / "roles"
-    roles_dir.mkdir()
-
-    (roles_dir / "worker.py").write_text('''
-from palimpsest.runtime.roles import role, JobSpec, context_spec
-
-@role(name="worker", description="Global worker role")
-def worker(**params):
-    return JobSpec(
-        preparation_fn=lambda: None,
-        context_fn=context_spec("global worker", []),
-        publication_fn=lambda **kw: None,
-    )
-''')
-
-    (roles_dir / "planner.py").write_text('''
-from palimpsest.runtime.roles import role, JobSpec, context_spec
-
-@role(name="planner", description="Global planner role")
-def planner(**params):
-    return JobSpec(
-        preparation_fn=lambda: None,
-        context_fn=context_spec("global planner", []),
-        publication_fn=lambda **kw: None,
-    )
-''')
-
-    # Team-specific roles
-    # Factorio team has worker.py that shadows global
-    factorio_roles = evo_root / "teams" / "factorio" / "roles"
+    # Factorio bundle roles
+    factorio_roles = evo_root / "factorio" / "roles"
     factorio_roles.mkdir(parents=True)
 
     (factorio_roles / "worker.py").write_text('''
 from palimpsest.runtime.roles import role, JobSpec, context_spec
 
-@role(name="worker", description="Factorio-specific worker role")
+@role(name="worker", description="Factorio worker role")
 def worker(**params):
     return JobSpec(
         preparation_fn=lambda: None,
@@ -78,174 +43,73 @@ def worker(**params):
     )
 ''')
 
-    # Alpha team has specialist.py that doesn't exist globally
-    alpha_roles = evo_root / "teams" / "alpha" / "roles"
-    alpha_roles.mkdir(parents=True)
-
-    (alpha_roles / "specialist.py").write_text('''
-from palimpsest.runtime.roles import role, JobSpec, context_spec
-
-@role(name="specialist", description="Alpha team specialist role")
-def specialist(**params):
-    return JobSpec(
-        preparation_fn=lambda: None,
-        context_fn=context_spec("alpha specialist", []),
-        publication_fn=lambda **kw: None,
-    )
-''')
-
     return evo_root
 
 
-class TestTwoLayerRoleResolution:
-    """Tests for two-layer role resolution with team parameter."""
+class TestBundleRoleResolution:
+    """Tests for bundle-only role resolution."""
 
-    def test_global_role_visible_to_all_teams(self, evo_with_layers: Path):
-        """Global role should be visible to teams that don't shadow it."""
-        # Team "beta" doesn't have its own roles directory
-        manager = RoleManager(evo_with_layers, team="beta")
-
-        # Should see global planner
-        meta = manager.get_definition("planner")
+    def test_bundle_role_is_discovered(self, evo_with_bundle: Path):
+        """Bundle role should be discoverable."""
+        manager = RoleManager(evo_with_bundle, bundle="factorio")
+        meta = manager.get_definition("worker")
+        
         assert meta is not None
-        assert meta.name == "planner"
-        assert meta.description == "Global planner role"
+        assert meta.name == "worker"
+        assert meta.description == "Factorio worker role"
 
-    def test_team_specific_role_shadows_global(self, evo_with_layers: Path):
-        """Team-specific role should shadow the global role."""
-        # Default team (no team dir) sees global worker
-        default_manager = RoleManager(evo_with_layers)
-        default_meta = default_manager.get_definition("worker")
-        assert default_meta is not None
-        assert default_meta.description == "Global worker role"
+    def test_missing_role_returns_none(self, evo_with_bundle: Path):
+        """Missing role should return None from get_definition."""
+        manager = RoleManager(evo_with_bundle, bundle="factorio")
+        meta = manager.get_definition("nonexistent")
+        
+        assert meta is None
 
-        # Factorio team sees its own worker
-        factorio_manager = RoleManager(evo_with_layers, team="factorio")
-        factorio_meta = factorio_manager.get_definition("worker")
-        assert factorio_meta is not None
-        assert factorio_meta.description == "Factorio-specific worker role"
-
-    def test_team_specific_role_only_visible_to_that_team(self, evo_with_layers: Path):
-        """Team-specific role should only be visible to that team."""
-        # Alpha team has specialist
-        alpha_manager = RoleManager(evo_with_layers, team="alpha")
-        alpha_meta = alpha_manager.get_definition("specialist")
-        assert alpha_meta is not None
-        assert alpha_meta.description == "Alpha team specialist role"
-
-        # Default team doesn't see alpha's specialist
-        default_manager = RoleManager(evo_with_layers)
-        default_meta = default_manager.get_definition("specialist")
-        assert default_meta is None  # Not found in global roles
-
-        # Factorio team also doesn't see alpha's specialist
-        factorio_manager = RoleManager(evo_with_layers, team="factorio")
-        factorio_meta = factorio_manager.get_definition("specialist")
-        assert factorio_meta is None
-
-    def test_missing_role_raises_error_on_resolve(self, evo_with_layers: Path):
+    def test_missing_role_raises_on_resolve(self, evo_with_bundle: Path):
         """Resolving a missing role should raise FileNotFoundError."""
-        manager = RoleManager(evo_with_layers, team="alpha")
-
+        manager = RoleManager(evo_with_bundle, bundle="factorio")
+        
         with pytest.raises(FileNotFoundError) as exc_info:
             manager.resolve("nonexistent")
-
+        
         assert "nonexistent" in str(exc_info.value)
 
-    def test_resolve_uses_team_specific_role(self, evo_with_layers: Path):
-        """resolve() should return JobSpec from team-specific role."""
-        manager = RoleManager(evo_with_layers, team="factorio")
+    def test_resolve_returns_jobspec(self, evo_with_bundle: Path):
+        """resolve() should return JobSpec from bundle role."""
+        manager = RoleManager(evo_with_bundle, bundle="factorio")
         spec = manager.resolve("worker")
-
+        
         assert spec is not None
         assert spec.source_role == "worker"
-        # The context_fn should return the factorio-specific context
         context = spec.context_fn(goal="test")
         assert context["system"] == "factorio worker"
 
-    def test_resolve_falls_back_to_global(self, evo_with_layers: Path):
-        """resolve() should fall back to global role when team doesn't have it."""
-        manager = RoleManager(evo_with_layers, team="factorio")
-        spec = manager.resolve("planner")
-
-        assert spec is not None
-        assert spec.source_role == "planner"
-        context = spec.context_fn(goal="test")
-        assert context["system"] == "global planner"
-
-    def test_list_definitions_includes_team_roles(self, evo_with_layers: Path):
-        """list_definitions() should include team-specific roles."""
-        alpha_manager = RoleManager(evo_with_layers, team="alpha")
-        roles = alpha_manager.list_definitions()
-
+    def test_list_definitions_shows_bundle_roles(self, evo_with_bundle: Path):
+        """list_definitions() should show bundle roles."""
+        manager = RoleManager(evo_with_bundle, bundle="factorio")
+        roles = manager.list_definitions()
+        
         role_names = [r.name for r in roles]
-        # Should have global roles
-        assert "planner" in role_names
         assert "worker" in role_names
-        # Should also have team-specific role
-        assert "specialist" in role_names
 
-    def test_default_team_parameter(self, evo_with_layers: Path):
-        """RoleManager should default to 'default' team."""
-        manager = RoleManager(evo_with_layers)
-        assert manager._team == "default"
-
-
-class TestTeamRolesDirectory:
-    """Tests for team roles directory handling."""
-
-    def test_nonexistent_team_roles_dir_falls_back_to_global(self, tmp_path: Path):
-        """When team has no roles dir, should fall back to global."""
+    def test_empty_bundle_returns_empty_list(self, tmp_path: Path):
+        """Bundle with no roles should return empty list."""
         evo_root = tmp_path / "evo"
         evo_root.mkdir()
-        roles_dir = evo_root / "roles"
-        roles_dir.mkdir()
+        (evo_root / "empty" / "roles").mkdir(parents=True)
+        
+        manager = RoleManager(evo_root, bundle="empty")
+        roles = manager.list_definitions()
+        
+        assert roles == []
 
-        (roles_dir / "worker.py").write_text('''
-from palimpsest.runtime.roles import role, JobSpec, context_spec
-
-@role(name="worker", description="Global worker role")
-def worker(**params):
-    return JobSpec(
-        preparation_fn=lambda: None,
-        context_fn=context_spec("global worker", []),
-        publication_fn=lambda **kw: None,
-    )
-''')
-
-        # Team "nonexistent" has no directory
-        manager = RoleManager(evo_root, team="nonexistent")
+    def test_no_bundle_parameter_returns_empty(self, evo_with_bundle: Path):
+        """RoleManager without bundle parameter returns empty results."""
+        manager = RoleManager(evo_with_bundle)
+        
+        # No bundle specified, no roles found
+        roles = manager.list_definitions()
+        assert roles == []
+        
         meta = manager.get_definition("worker")
-
-        assert meta is not None
-        assert meta.description == "Global worker role"
-
-    def test_empty_team_roles_dir_falls_back_to_global(self, tmp_path: Path):
-        """When team roles dir exists but is empty, should fall back to global."""
-        evo_root = tmp_path / "evo"
-        evo_root.mkdir()
-
-        # Global roles
-        roles_dir = evo_root / "roles"
-        roles_dir.mkdir()
-        (roles_dir / "worker.py").write_text('''
-from palimpsest.runtime.roles import role, JobSpec, context_spec
-
-@role(name="worker", description="Global worker role")
-def worker(**params):
-    return JobSpec(
-        preparation_fn=lambda: None,
-        context_fn=context_spec("global worker", []),
-        publication_fn=lambda **kw: None,
-    )
-''')
-
-        # Empty team roles dir
-        team_roles_dir = evo_root / "teams" / "empty" / "roles"
-        team_roles_dir.mkdir(parents=True)
-
-        manager = RoleManager(evo_root, team="empty")
-        meta = manager.get_definition("worker")
-
-        assert meta is not None
-        assert meta.description == "Global worker role"
+        assert meta is None

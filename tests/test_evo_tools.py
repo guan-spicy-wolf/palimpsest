@@ -56,7 +56,7 @@ def test_task_complete_tool_is_removed():
 def test_unified_tool_gateway_treats_builtin_tools_as_builtin(monkeypatch):
     requested = []
 
-    def fake_resolve_tool_functions(_evo_root, _team, names):
+    def fake_resolve_tool_functions(_evo_root, _bundle, names):
         requested.append(list(names))
         return {}
 
@@ -69,7 +69,7 @@ def test_unified_tool_gateway_treats_builtin_tools_as_builtin(monkeypatch):
     gateway = UnifiedToolGateway(
         config=ToolsConfig(),
         evo_root=EVO_ROOT,
-        team="default",
+        bundle="",
         requested_evo_tools=["spawn", "create_pr", "read_file"],
         gateway=FakeGateway(),
     )
