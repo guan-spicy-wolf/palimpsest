@@ -62,11 +62,12 @@ def container_entrypoint(verbose: bool):
 
 @main.command("roles")
 @click.option("--evo-path", default="evo", help="Path to evolvable repository")
-def list_roles_cmd(evo_path: str):
-    """List available roles in the evolvable repository."""
+@click.option("--bundle", "-b", required=True, help="Bundle name (e.g., factorio)")
+def list_roles_cmd(evo_path: str, bundle: str):
+    """List available roles in the specified bundle."""
     from palimpsest.runtime import RoleManager
 
-    resolver = RoleManager(evo_path)
+    resolver = RoleManager(evo_path, bundle=bundle)
     for name in resolver.list_roles():
         click.echo(name)
 
