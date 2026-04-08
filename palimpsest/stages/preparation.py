@@ -59,6 +59,24 @@ def run_preparation(
         from palimpsest.events import StageTransitionData
         gateway.emit(StageTransitionData(from_stage="init", to_stage="workspace"))
 
+    # Check for workspace_override first (per plan Task 3.2)
+    if config.workspace_override:
+        workspace_path = config.workspace_override
+        logger.info(f"Using workspace override: {workspace_path}")
+        if config.repo:
+            raise ValueError("workspace_override and repo are mutually exclusive")
+        # Don't create directory, don't clone - caller ensures path exists
+        if gateway:
+            gateway.emit(
+                JobStartedData(
+                    workspace_path=workspace_path,
+                    evo_sha=evo_sha,
+                    base_sha="",  # No git repo for override workspace
+                    cost_tracking_degraded=cost_tracking_degraded,
+                )
+            )
+        return workspace_path
+
     workspace_path = tempfile.mkdtemp(prefix="palimpsest-")
     logger.info(f"Created workspace: {workspace_path}")
 
