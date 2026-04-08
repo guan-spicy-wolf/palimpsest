@@ -191,7 +191,7 @@ def publish_results(
         return None, artifact_bindings
     repo.git.add("-A")
 
-    summary = str(result.get("summary", "") or "").strip()[:500]
+    summary = str(result.get("summary", "") or "").strip()[:4096]
     code = str(result.get("code", "") or "")
     subject = _commit_subject(summary, goal, code=code)
     body = _commit_body(job_id=job_id, task_id=task_id, summary=summary, code=code)

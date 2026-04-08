@@ -182,7 +182,7 @@ def run_interaction_loop(
             return {
                 "summary": _budget_exhausted_summary(
                     budget_reason, budget, candidate_summary
-                )[:500],
+                )[:4096],
                 "status": "partial",
                 "code": "budget_exhausted",
                 "budget_dim": budget_reason,
@@ -227,7 +227,7 @@ def run_interaction_loop(
             logger.info("LLM remained idle after confirmation; ending loop")
             summary = candidate_summary or response_summary or "LLM stopped calling tools."
             return {
-                "summary": summary[:500],
+                "summary": summary[:4096],
                 "status": "complete",
                 "code": "",
                 "messages": messages,
