@@ -12,6 +12,15 @@ from palimpsest.runtime.event_gateway import EventGateway
 from palimpsest.runtime.llm import LLMGateway, UnifiedLLMGateway, LLMResponse, ToolCall
 from palimpsest.runtime.mock_llm import MockLLMGateway, LLMResponse as MockLLMResponse, ToolCall as MockToolCall
 from palimpsest.runtime.tools import UnifiedToolGateway, ToolResult
+# ADR-0016: Capability model
+from palimpsest.runtime.capability import (
+    Capability,
+    JobContext,
+    GitWorkspaceCapability,
+    CleanupCapability,
+    BUILTIN_CAPABILITIES,
+    get_capability,
+)
 
 __all__ = [
     "RuntimeContext",
@@ -32,4 +41,11 @@ __all__ = [
     "MockToolCall",
     "UnifiedToolGateway",
     "ToolResult",
+    # ADR-0016
+    "Capability",
+    "JobContext",
+    "GitWorkspaceCapability",
+    "CleanupCapability",
+    "BUILTIN_CAPABILITIES",
+    "get_capability",
 ]
