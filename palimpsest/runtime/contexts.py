@@ -45,25 +45,21 @@ def _load_context_functions(py_path: Path) -> dict[str, Callable]:
 
 
 def resolve_context_functions(
-    evo_root: str | Path,
+    bundle_workspace: str | Path,
     requested: list[str],
-    bundle: str = "",
 ) -> dict[str, Callable]:
-    """Scan evo/<bundle>/contexts/ for context providers.
+    """Scan bundle_workspace/contexts/ for context providers.
     
-    Per Bundle MVP: Only looks in bundle directory, no global fallback.
+    Per ADR-0015: Looks in bundle_workspace/contexts/ directly.
     """
-    if not bundle:
-        return {}
-        
     requested_set = set(requested)
     result: dict[str, Callable] = {}
     
     # Scan bundle contexts only
-    bundle_dir = Path(evo_root) / bundle / "contexts"
+    contexts_dir = Path(bundle_workspace) / "contexts"
     
-    if bundle_dir.is_dir():
-        for py_file in sorted(bundle_dir.glob("*.py")):
+    if contexts_dir.is_dir():
+        for py_file in sorted(contexts_dir.glob("*.py")):
             if py_file.name.startswith("_"):
                 continue
             funcs = _load_context_functions(py_file)
@@ -73,6 +69,6 @@ def resolve_context_functions(
 
     missing = requested_set - set(result.keys())
     if missing:
-        logger.warning(f"Context providers not found (bundle={bundle}): {missing}")
+        logger.warning(f"Context providers not found: {missing}")
 
     return result

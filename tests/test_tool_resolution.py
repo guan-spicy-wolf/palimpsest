@@ -1,7 +1,6 @@
-"""Tests for bundle-only tool resolution (Bundle MVP).
+"""Tests for bundle-only tool resolution (ADR-0015).
 
-Per Bundle MVP: Tools are loaded from evo/<bundle>/tools/ only.
-No global fallback, no team layer.
+Per ADR-0015: Tools are loaded from bundle_workspace/tools/ directly.
 """
 import textwrap
 from pathlib import Path
@@ -17,12 +16,12 @@ from palimpsest.runtime.tools import (
 from palimpsest.config import ToolsConfig
 
 
-class TestResolveToolFunctionsBundleOnly:
-    """Tests for resolve_tool_functions with bundle-only resolution."""
+class TestResolveToolFunctionsBundleWorkspace:
+    """Tests for resolve_tool_functions with bundle_workspace resolution."""
 
     def test_finds_bundle_tools(self, tmp_path: Path) -> None:
-        """Bundle tools in evo/<bundle>/tools/ are discovered."""
-        tools_dir = tmp_path / "factorio" / "tools"
+        """Bundle tools in bundle_workspace/tools/ are discovered."""
+        tools_dir = tmp_path / "tools"
         tools_dir.mkdir(parents=True)
         (tools_dir / "bundle_tool.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
@@ -33,52 +32,29 @@ class TestResolveToolFunctionsBundleOnly:
                 return ToolResult(success=True, output=f"bundle: {msg}")
         """))
 
-        funcs = resolve_tool_functions(tmp_path, "factorio", ["bundle_tool"])
+        funcs = resolve_tool_functions(tmp_path, ["bundle_tool"])
         assert "bundle_tool" in funcs
         result = funcs["bundle_tool"](msg="hello")
         assert result.output == "bundle: hello"
 
-    def test_empty_bundle_returns_empty(self, tmp_path: Path) -> None:
-        """Empty bundle parameter returns empty dict."""
-        tools_dir = tmp_path / "factorio" / "tools"
-        tools_dir.mkdir(parents=True)
-        (tools_dir / "tool.py").write_text(textwrap.dedent("""\
-            from palimpsest.runtime.tools import tool, ToolResult
-
-            @tool
-            def tool_fn(msg: str) -> ToolResult:
-                return ToolResult(success=True, output=msg)
-        """))
-
-        funcs = resolve_tool_functions(tmp_path, "", ["tool_fn"])
-        assert funcs == {}
-
-    def test_nonexistent_bundle_returns_empty(self, tmp_path: Path) -> None:
-        """Nonexistent bundle returns empty dict."""
-        tools_dir = tmp_path / "factorio" / "tools"
-        tools_dir.mkdir(parents=True)
-        (tools_dir / "tool.py").write_text(textwrap.dedent("""\
-            from palimpsest.runtime.tools import tool, ToolResult
-
-            @tool
-            def tool_fn(msg: str) -> ToolResult:
-                return ToolResult(success=True, output=msg)
-        """))
-
-        funcs = resolve_tool_functions(tmp_path, "nonexistent", ["tool_fn"])
+    def test_empty_workspace_returns_empty(self, tmp_path: Path) -> None:
+        """Empty workspace returns empty dict when no tools found."""
+        # No tools directory
+        funcs = resolve_tool_functions(tmp_path, ["tool_fn"])
         assert funcs == {}
 
     def test_returns_empty_for_missing_tools(self, tmp_path: Path) -> None:
         """Returns empty dict when no requested tools are found."""
-        tools_dir = tmp_path / "factorio" / "tools"
+        tools_dir = tmp_path / "tools"
         tools_dir.mkdir(parents=True)
+        # No .py files
 
-        funcs = resolve_tool_functions(tmp_path, "factorio", ["nonexistent"])
+        funcs = resolve_tool_functions(tmp_path, ["nonexistent"])
         assert funcs == {}
 
     def test_ignores_underscore_prefixed_files(self, tmp_path: Path) -> None:
         """Files starting with underscore are ignored."""
-        tools_dir = tmp_path / "factorio" / "tools"
+        tools_dir = tmp_path / "tools"
         tools_dir.mkdir(parents=True)
         (tools_dir / "_private.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
@@ -95,86 +71,51 @@ class TestResolveToolFunctionsBundleOnly:
                 return ToolResult(success=True, output=msg)
         """))
 
-        funcs = resolve_tool_functions(tmp_path, "factorio", ["private_tool", "public_tool"])
+        funcs = resolve_tool_functions(tmp_path, ["private_tool", "public_tool"])
         assert "private_tool" not in funcs  # In _private.py, should be ignored
         assert "public_tool" in funcs
 
     def test_multiple_tools_in_bundle(self, tmp_path: Path) -> None:
-        """Multiple tools in bundle are all discovered."""
-        tools_dir = tmp_path / "factorio" / "tools"
+        """Multiple tools in one file are discovered."""
+        tools_dir = tmp_path / "tools"
         tools_dir.mkdir(parents=True)
-        (tools_dir / "tool_a.py").write_text(textwrap.dedent("""\
+        (tools_dir / "multi.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
-            def tool_a(msg: str) -> ToolResult:
-                return ToolResult(success=True, output=f"a: {msg}")
-        """))
-        (tools_dir / "tool_b.py").write_text(textwrap.dedent("""\
-            from palimpsest.runtime.tools import tool, ToolResult
+            def first(msg: str) -> ToolResult:
+                return ToolResult(success=True, output=f"first: {msg}")
 
             @tool
-            def tool_b(msg: str) -> ToolResult:
-                return ToolResult(success=True, output=f"b: {msg}")
+            def second(msg: str) -> ToolResult:
+                return ToolResult(success=True, output=f"second: {msg}")
         """))
 
-        funcs = resolve_tool_functions(tmp_path, "factorio", ["tool_a", "tool_b"])
-        assert "tool_a" in funcs
-        assert "tool_b" in funcs
-        assert funcs["tool_a"](msg="x").output == "a: x"
-        assert funcs["tool_b"](msg="y").output == "b: y"
+        funcs = resolve_tool_functions(tmp_path, ["first", "second"])
+        assert "first" in funcs
+        assert "second" in funcs
+        assert funcs["first"](msg="x").output == "first: x"
+        assert funcs["second"](msg="y").output == "second: y"
 
 
 class TestUnifiedToolGatewayWithBundle:
-    """Tests for UnifiedToolGateway with bundle parameter."""
+    """Tests for UnifiedToolGateway loading from bundle_workspace."""
 
     def test_gateway_loads_bundle_tools(self, tmp_path: Path) -> None:
-        """UnifiedToolGateway loads bundle-specific tools."""
-        tools_dir = tmp_path / "engineering" / "tools"
+        """Gateway loads tools from bundle_workspace/tools/."""
+        tools_dir = tmp_path / "tools"
         tools_dir.mkdir(parents=True)
-        (tools_dir / "deploy.py").write_text(textwrap.dedent("""\
+        (tools_dir / "custom.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.tools import tool, ToolResult
 
             @tool
-            def deploy(env: str) -> ToolResult:
-                \"\"\"Deploy to environment.\"\"\"
-                return ToolResult(success=True, output=f"deployed to {env}")
+            def custom_tool(msg: str) -> ToolResult:
+                return ToolResult(success=True, output=f"custom: {msg}")
         """))
 
         config = ToolsConfig(disabled_builtins=["bash", "spawn", "create_pr"])
         gateway = MagicMock()
-        gw = UnifiedToolGateway(
-            config,
-            tmp_path,
-            "engineering",  # bundle parameter
-            ["deploy"],
-            gateway,
-        )
+        gw = UnifiedToolGateway(config, tmp_path, ["custom_tool"], gateway)
         schemas = gw.schema()
         names = [schema["function"]["name"] for schema in schemas]
-        assert "deploy" in names
-
-    def test_gateway_empty_bundle_no_tools(self, tmp_path: Path) -> None:
-        """UnifiedToolGateway with empty bundle has no evo tools."""
-        tools_dir = tmp_path / "factorio" / "tools"
-        tools_dir.mkdir(parents=True)
-        (tools_dir / "tool.py").write_text(textwrap.dedent("""\
-            from palimpsest.runtime.tools import tool, ToolResult
-
-            @tool
-            def tool_fn(msg: str) -> ToolResult:
-                return ToolResult(success=True, output=msg)
-        """))
-
-        config = ToolsConfig(disabled_builtins=["bash", "spawn", "create_pr"])
-        gateway = MagicMock()
-        gw = UnifiedToolGateway(
-            config,
-            tmp_path,
-            "",  # empty bundle
-            ["tool_fn"],
-            gateway,
-        )
-        schemas = gw.schema()
-        names = [schema["function"]["name"] for schema in schemas]
-        assert "tool_fn" not in names  # No evo tools loaded
+        assert names == ["custom_tool"]

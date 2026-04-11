@@ -54,7 +54,7 @@ def _base_patches(emitter, tmp_path, **overrides):
     """Return a dict of common patches for runner tests."""
     defaults = {
         "palimpsest.runner.EventEmitter": MagicMock(return_value=emitter),
-        "palimpsest.runner._read_evo_sha": MagicMock(return_value="abc123"),
+        "palimpsest.runner._read_bundle_sha": MagicMock(return_value="abc123"),
         "palimpsest.runner.setup_workspace": MagicMock(return_value=str(tmp_path)),
         "palimpsest.runner.build_context": MagicMock(return_value={"system": "sys", "task": "task"}),
         "palimpsest.runner.UnifiedLLMGateway": MagicMock(),

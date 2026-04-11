@@ -208,10 +208,9 @@ class RoleManager(RoleMetadataReader):
     - Missing role is a hard error
     """
 
-    def __init__(self, evo_root: str | Path, bundle: str = "") -> None:
-        super().__init__(evo_root)
-        self._bundle = bundle
-        self._bundle_roles_dir = self._root / bundle / "roles" if bundle else None
+    def __init__(self, bundle_root: str | Path) -> None:
+        super().__init__(bundle_root)
+        self._roles_dir = self._root / "roles"
 
     def resolve(self, role_name: str, **params: Any) -> JobSpec:
         """Load and execute role module to produce JobSpec.
@@ -229,16 +228,13 @@ class RoleManager(RoleMetadataReader):
         return spec
 
     def get_definition(self, name: str) -> RoleMetadata | None:
-        """Get a specific role definition by name from the bundle.
+        """Get a specific role definition by name from bundle.
 
-        Per Bundle MVP: Only looks in evo/<bundle>/roles/.
+        Per ADR-0015: Looks in bundle_workspace/roles/<name>.py.
         """
-        if not self._bundle_roles_dir:
-            return None
-            
-        bundle_path = self._bundle_roles_dir / f"{name}.py"
-        if bundle_path.exists():
-            return self._read_role_file(bundle_path)
+        role_path = self._roles_dir / f"{name}.py"
+        if role_path.exists():
+            return self._read_role_file(role_path)
         return None
 
     def list_roles(self) -> list[str]:
@@ -247,13 +243,13 @@ class RoleManager(RoleMetadataReader):
     def list_definitions(self) -> list[RoleMetadata]:
         """List all role definitions in the bundle.
 
-        Per Bundle MVP: Only scans evo/<bundle>/roles/.
+        Per ADR-0015: Scans bundle_workspace/roles/.
         """
-        if not self._bundle_roles_dir or not self._bundle_roles_dir.exists():
+        if not self._roles_dir.exists():
             return []
-            
+
         result: list[RoleMetadata] = []
-        for py_path in sorted(self._bundle_roles_dir.glob("*.py")):
+        for py_path in sorted(self._roles_dir.glob("*.py")):
             if py_path.name.startswith("_"):
                 continue
             meta = self._read_role_file(py_path)
@@ -268,19 +264,16 @@ class RoleManager(RoleMetadataReader):
     def _load_role_by_name(self, name: str) -> tuple[Callable[..., JobSpec], RoleMetadata]:
         """Load role module from bundle directory.
 
-        Per Bundle MVP: Only looks in evo/<bundle>/roles/<name>.py.
+        Per ADR-0015: Looks in bundle_workspace/roles/<name>.py.
         Raises FileNotFoundError if not found.
         """
-        if not self._bundle_roles_dir:
-            raise ValueError("bundle parameter is required for role resolution")
-        
-        bundle_path = self._bundle_roles_dir / f"{name}.py"
-        if not bundle_path.exists():
+        role_path = self._roles_dir / f"{name}.py"
+        if not role_path.exists():
             raise FileNotFoundError(
-                f"Role '{name}' not found in bundle '{self._bundle}' "
-                f"(expected {bundle_path})"
+                f"Role '{name}' not found in bundle workspace "
+                f"(expected {role_path})"
             )
-        return self._load_role_module(bundle_path, expected_name=name)
+        return self._load_role_module(role_path, expected_name=name)
 
     def _load_role_module(
         self,

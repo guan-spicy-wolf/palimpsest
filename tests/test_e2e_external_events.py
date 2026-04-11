@@ -126,8 +126,8 @@ class TestE2EExternalEventFlow:
         )
 
         # Load context provider via resolve_context_functions
-        evo_root = Path(__file__).parent.parent.parent / "evo"
-        registry = resolve_context_functions(evo_root, ["github_context"], bundle="factorio")
+        bundle_workspace = Path(__file__).parent.parent.parent / "evo"
+        registry = resolve_context_functions(bundle_workspace, ["github_context"], bundle="factorio")
         assert "github_context" in registry, "github_context provider not found in factorio bundle"
         
         result = registry["github_context"](job_config=job_config)
@@ -168,8 +168,8 @@ class TestE2EExternalEventFlow:
         )
 
         # Load context provider via resolve_context_functions
-        evo_root = Path(__file__).parent.parent.parent / "evo"
-        registry = resolve_context_functions(evo_root, ["github_context"], bundle="factorio")
+        bundle_workspace = Path(__file__).parent.parent.parent / "evo"
+        registry = resolve_context_functions(bundle_workspace, ["github_context"], bundle="factorio")
         result = registry["github_context"](job_config=job_config)
 
         assert "GitHub Context" in result
@@ -259,8 +259,8 @@ class TestE2EFullPipeline:
         )
 
         # Step 5: Render context via resolve_context_functions
-        evo_root = Path(__file__).parent.parent.parent / "evo"
-        registry = resolve_context_functions(evo_root, ["github_context"], bundle="factorio")
+        bundle_workspace = Path(__file__).parent.parent.parent / "evo"
+        registry = resolve_context_functions(bundle_workspace, ["github_context"], bundle="factorio")
         context = registry["github_context"](job_config=job_config)
 
         # Step 6: Verify context contains PR info

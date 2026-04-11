@@ -25,7 +25,7 @@ def test_unified_tool_gateway_treats_builtin_tools_as_builtin(monkeypatch):
     """Builtin tools (spawn, create_pr) are not resolved from evo directory."""
     requested = []
 
-    def fake_resolve_tool_functions(_evo_root, _bundle, names):
+    def fake_resolve_tool_functions(_bundle_workspace, _bundle, names):
         requested.append(list(names))
         return {}
 
@@ -37,7 +37,7 @@ def test_unified_tool_gateway_treats_builtin_tools_as_builtin(monkeypatch):
 
     gateway = UnifiedToolGateway(
         config=ToolsConfig(),
-        evo_root=EVO_ROOT,
+        bundle_workspace=EVO_ROOT,
         bundle="",
         requested_evo_tools=["spawn", "create_pr", "read_file"],
         gateway=FakeGateway(),
@@ -74,7 +74,7 @@ class TestSpawn:
             tasks=[{"goal": "Inspect the repository structure", "role": "default"}],
             workspace=str(tmp_path),
             gateway=FakeGateway(),
-            evo_root=str(EVO_ROOT),
+            bundle_workspace=str(EVO_ROOT),
             wait_for="all_complete",
         )
 
@@ -109,7 +109,7 @@ class TestSpawn:
             tasks=[{"task": "Review docs", "role": "default"}],
             workspace=str(tmp_path),
             gateway=FakeGateway(),
-            evo_root=str(EVO_ROOT),
+            bundle_workspace=str(EVO_ROOT),
         )
 
         # Legacy field 'task' should be rejected
@@ -138,7 +138,7 @@ class TestSpawn:
             tasks=[{"goal": "Review docs", "role": "default", "branch": "docs-branch"}],
             workspace=str(tmp_path),
             gateway=FakeGateway(),
-            evo_root=str(EVO_ROOT),
+            bundle_workspace=str(EVO_ROOT),
         )
 
         # Legacy field 'branch' should be rejected
@@ -166,7 +166,7 @@ class TestSpawn:
             tasks=[{"goal": "Implement OAuth2 login endpoint", "role": "implementer", "budget": 0.6}],
             workspace=str(tmp_path),
             gateway=FakeGateway(),
-            evo_root=str(EVO_ROOT),
+            bundle_workspace=str(EVO_ROOT),
         )
 
         assert result.success is True
@@ -196,7 +196,7 @@ class TestSpawn:
             tasks=[{"goal": "Join and review", "role": "planner", "params": {"mode": "join"}}],
             workspace=str(tmp_path),
             gateway=FakeGateway(),
-            evo_root=str(EVO_ROOT),
+            bundle_workspace=str(EVO_ROOT),
         )
 
         assert result.success is True

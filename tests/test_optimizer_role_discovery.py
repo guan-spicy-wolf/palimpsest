@@ -37,7 +37,7 @@ def test_optimizer_role_is_discovered_by_ast(tmp_path):
     """))
 
     # RoleMetadataReader (via RoleManager) should discover it
-    manager = RoleManager(tmp_path, bundle="factorio")
+    manager = RoleManager(tmp_path / "factorio")
     definitions = manager.list_definitions()
     
     assert len(definitions) == 1
@@ -71,7 +71,7 @@ def test_role_decorator_required_for_discovery(tmp_path):
         some_role.__role_name__ = "some_role"
     """))
 
-    manager = RoleManager(tmp_path, bundle="factorio")
+    manager = RoleManager(tmp_path / "factorio")
     definitions = manager.list_definitions()
     
     # Should NOT discover this role (no @role decorator)
@@ -97,7 +97,7 @@ def test_role_decorator_literal_args_required(tmp_path):
             pass
     """))
 
-    manager = RoleManager(tmp_path, bundle="factorio")
+    manager = RoleManager(tmp_path / "factorio")
     
     # Should raise ValueError when scanning non-literal decorator args
     with pytest.raises(ValueError) as exc_info:
@@ -129,7 +129,7 @@ def test_factorio_bundle_role_discovery(tmp_path):
     """))
 
     # RoleManager for factorio bundle should find the worker role
-    manager = RoleManager(tmp_path, bundle="factorio")
+    manager = RoleManager(tmp_path / "factorio")
     definitions = manager.list_definitions()
     
     assert len(definitions) == 1
@@ -173,7 +173,7 @@ def test_role_metadata_reader_vs_role_manager():
         assert meta.min_cost == 0.1
         
         # RoleManager (execution) - used by palimpsest
-        manager = RoleManager(tmp_path, bundle="factorio")
+        manager = RoleManager(tmp_path / "factorio")
         spec = manager.resolve("test_role")
         assert spec is not None
         assert "bash" in spec.tools

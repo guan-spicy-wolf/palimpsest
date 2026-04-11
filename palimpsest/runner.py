@@ -97,7 +97,7 @@ def run_job(config: JobConfig) -> None:
     # Backward compat: if no bundle_source, use evo_sha to find evo
     evo_path = Path(bundle_workspace) if bundle_workspace else Path(_EVO_DIR)
     
-    resolver = RoleManager(evo_path, bundle=config.bundle)
+    resolver = RoleManager(evo_path)
     spec = resolver.resolve(config.role, **dict(config.role_params or {}))
 
     logger.info(
@@ -260,7 +260,8 @@ def _run_job_from_spec(
         )
 
         # Stage 3: Interaction
-        tools = _setup_tools(config, spec, evo_path, "", gateway, config.bundle)
+        bundle_sha = config.bundle_source.resolved_ref if config.bundle_source else ""
+        tools = _setup_tools(config, spec, Path(bundle_workspace), bundle_sha, gateway)
         
         if needs:
             # ADR-0016: capability path - no publication_fn, interaction only
@@ -371,19 +372,17 @@ def _run_job_from_spec(
 def _setup_tools(
     config: JobConfig,
     spec: JobSpec,
-    evo_path: Path,
-    evo_sha: str,
+    bundle_workspace: Path,
+    bundle_sha: str,
     gateway: EventGateway,
-    bundle: str,
 ) -> UnifiedToolGateway:
-    """Create the unified tool gateway from builtin + evo providers."""
+    """Create the unified tool gateway from builtin + bundle providers."""
     return UnifiedToolGateway(
         config.tools,
-        evo_path,
-        bundle,
+        bundle_workspace,
         spec.tools,
         gateway,
-        evo_sha=evo_sha,
+        bundle_sha=bundle_sha,
         tool_timeout_seconds=config.llm.tool_timeout_seconds,
     )
 
@@ -514,34 +513,37 @@ def _install_timeout(seconds: int) -> None:
 # Git helpers
 # ---------------------------------------------------------------------------
 
-def _read_evo_sha(evo_path: Path) -> str:
-    """Return the HEAD SHA of the evolvable repo, or empty string."""
+def _read_bundle_sha(bundle_path: Path) -> str:
+    """Return the HEAD SHA of the bundle repo, or empty string."""
     try:
-        return git.Repo(evo_path).head.commit.hexsha
+        return git.Repo(bundle_path).head.commit.hexsha
     except Exception:
-        logger.debug("Could not read evolvable repo HEAD")
+        logger.debug("Could not read bundle repo HEAD")
         return ""
+
+# Backward compat alias
+_read_evo_sha = _read_bundle_sha
 
 
 @contextmanager
-def _materialize_evo_root(requested_sha: str | None):
-    live_evo_path = Path.cwd() / _EVO_DIR
+def _materialize_bundle_root(requested_sha: str | None):
+    bundle_path = Path.cwd() / _EVO_DIR
     if not requested_sha:
-        yield live_evo_path, _read_evo_sha(live_evo_path)
+        yield bundle_path, _read_bundle_sha(bundle_path)
         return
 
-    repo = git.Repo(live_evo_path)
+    repo = git.Repo(bundle_path)
     resolved_commit = repo.commit(requested_sha).hexsha
-    current_sha = _read_evo_sha(live_evo_path)
+    current_sha = _read_bundle_sha(bundle_path)
     if current_sha == resolved_commit:
-        yield live_evo_path, resolved_commit
+        yield bundle_path, resolved_commit
         return
 
-    with tempfile.TemporaryDirectory(prefix="palimpsest-evo-") as tmpdir:
-        materialized = Path(tmpdir) / "evo"
+    with tempfile.TemporaryDirectory(prefix="palimpsest-bundle-") as tmpdir:
+        materialized = Path(tmpdir) / "bundle"
         materialized.mkdir(parents=True, exist_ok=True)
         archive = subprocess.run(
-            ["git", "-C", str(live_evo_path), "archive", "--format=tar", resolved_commit],
+            ["git", "-C", str(bundle_path), "archive", "--format=tar", resolved_commit],
             capture_output=True,
             check=True,
         )

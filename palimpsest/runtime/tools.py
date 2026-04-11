@@ -508,30 +508,26 @@ def _load_tool_functions(py_path: Path) -> dict[str, Callable]:
 
 
 def resolve_tool_functions(
-    evo_root: str | Path,
-    bundle: str,
+    bundle_workspace: str | Path,
     requested: list[str],
 ) -> dict[str, Callable]:
-    """Scan evo/<bundle>/tools/ for requested @tool functions.
+    """Scan bundle_workspace/tools/ for requested @tool functions.
 
-    Per Bundle MVP: Only looks in bundle directory, no global fallback.
+    Per ADR-0015: Looks in bundle_workspace/tools/ directly.
 
     Args:
-        evo_root: Root directory of the evo repository
-        bundle: Bundle name to resolve tools for
+        bundle_workspace: Bundle repo root directory
         requested: List of tool names to resolve
 
     Returns:
         Dict mapping tool names to their callable functions.
     """
-    evo_path = Path(evo_root)
+    tools_dir = Path(bundle_workspace) / "tools"
     requested_set = set(requested)
     result: dict[str, Callable] = {}
 
-    # Scan bundle tools only
-    bundle_tools_dir = evo_path / bundle / "tools"
-    if bundle_tools_dir.is_dir():
-        for py_file in sorted(bundle_tools_dir.glob("*.py")):
+    if tools_dir.is_dir():
+        for py_file in sorted(tools_dir.glob("*.py")):
             if py_file.name.startswith("_"):
                 continue
             funcs = _load_tool_functions(py_file)
@@ -541,7 +537,7 @@ def resolve_tool_functions(
 
     missing = requested_set - set(result.keys())
     if missing:
-        logger.warning(f"Tools not found (bundle={bundle}): {missing}")
+        logger.warning(f"Tools not found: {missing}")
 
     return result
 
@@ -569,17 +565,16 @@ class UnifiedToolGateway:
     def __init__(
         self,
         config: ToolsConfig,
-        evo_root: Path,
-        bundle: str,
+        bundle_workspace: Path,
         requested_evo_tools: list[str],
         gateway: EventGateway,
-        evo_sha: str = "",
+        bundle_sha: str = "",
         tool_timeout_seconds: float = 300.0,
     ):
         self._gateway = gateway
         self._config = config
-        self._evo_root = evo_root
-        self._evo_sha = evo_sha
+        self._bundle_workspace = bundle_workspace
+        self._bundle_sha = bundle_sha
         self._tool_timeout_seconds = tool_timeout_seconds
 
         # Load builtins - only include builtins that appear in the role's
@@ -603,15 +598,15 @@ class UnifiedToolGateway:
             self._functions["spawn"] = spawn
         if "create_pr" not in disabled and ("create_pr" in requested or not requested):
             self._functions["create_pr"] = create_pr
-        # Load evo tools from bundle
-        requested_evo = [name for name in requested_evo_tools if name not in BUILTIN_TOOL_NAMES]
-        evo_funcs = resolve_tool_functions(evo_root, bundle, requested_evo)
+        # Load bundle tools from bundle_workspace
+        requested_bundle = [name for name in requested_evo_tools if name not in BUILTIN_TOOL_NAMES]
+        bundle_funcs = resolve_tool_functions(bundle_workspace, requested_bundle)
 
-        dups = find_duplicate_tool_names(self._functions, evo_funcs)
+        dups = find_duplicate_tool_names(self._functions, bundle_funcs)
         if dups:
             raise ValueError("Duplicate tool names configured: " + ", ".join(dups))
 
-        self._functions.update(evo_funcs)
+        self._functions.update(bundle_funcs)
 
         # Pre-build schemas
         self._schemas = [func.__tool_schema__ for func in self._functions.values()]
@@ -648,10 +643,15 @@ class UnifiedToolGateway:
                 kwargs["workspace"] = workspace
             if "gateway" in sig.parameters and getattr(func, "__module__", "").startswith("palimpsest.runtime"):
                 kwargs["gateway"] = self._gateway
-            if "evo_root" in sig.parameters:
-                kwargs["evo_root"] = str(self._evo_root)
-            if "evo_sha" in sig.parameters:
-                kwargs["evo_sha"] = self._evo_sha
+            if "bundle_workspace" in sig.parameters:
+                kwargs["bundle_workspace"] = str(self._bundle_workspace)
+            if "bundle_sha" in sig.parameters:
+                kwargs["bundle_sha"] = self._bundle_sha
+            # Backward compat: support old evo_root/evo_sha signatures
+            if "evo_root" in sig.parameters and "bundle_workspace" not in kwargs:
+                kwargs["evo_root"] = str(self._bundle_workspace)
+            if "evo_sha" in sig.parameters and "bundle_sha" not in kwargs:
+                kwargs["evo_sha"] = self._bundle_sha
             if "runtime_context" in sig.parameters and runtime_context is not None:
                 kwargs["runtime_context"] = runtime_context
 

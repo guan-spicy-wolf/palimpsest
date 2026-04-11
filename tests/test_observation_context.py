@@ -71,9 +71,9 @@ def evo_with_observation_context(tmp_path):
     return tmp_path
 
 
-def get_observation_context_provider(evo_root, bundle="factorio"):
+def get_observation_context_provider(bundle_workspace="factorio"):
     """Load the observation_context provider from bundle contexts."""
-    providers = resolve_context_functions(evo_root, ["observation_context"], bundle=bundle)
+    providers = resolve_context_functions(bundle_workspace, ["observation_context"], bundle=bundle_workspace)
     return providers.get("observation_context")
 
 
