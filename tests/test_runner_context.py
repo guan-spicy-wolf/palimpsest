@@ -103,7 +103,7 @@ def test_runner_creates_runtime_context(tmp_path):
     patches["palimpsest.runner.git.Repo"] = MagicMock()
 
     with _apply_patches(patches)[0]:
-        _run_job_from_spec(config, spec_with_capture, tmp_path)
+        _run_job_from_spec(config, spec_with_capture, tmp_path, bundle_workspace="", target_workspace="")
 
     # Verify RuntimeContext was created and passed to preparation_fn
     assert "runtime_context" in captured
@@ -152,7 +152,7 @@ def test_runner_sets_workspace_path_on_context(tmp_path):
     patches["palimpsest.runner.git.Repo"] = MagicMock()
 
     with _apply_patches(patches)[0]:
-        _run_job_from_spec(config, spec_capture, tmp_path)
+        _run_job_from_spec(config, spec_capture, tmp_path, bundle_workspace="", target_workspace="")
 
     # workspace_path should have been empty during prep
     assert workspace_path_at_prep == [""]  # not set yet during prep
@@ -183,7 +183,7 @@ def test_runner_passes_runtime_context_to_tool_gateway(tmp_path):
     patches["palimpsest.runner.git.Repo"] = MagicMock()
 
     with _apply_patches(patches)[0]:
-        _run_job_from_spec(config, spec, tmp_path)
+        _run_job_from_spec(config, spec, tmp_path, bundle_workspace="", target_workspace="")
 
     # Verify gateway.execute was called (by run_interaction_loop)
     # The runtime_context should be passed through
@@ -219,7 +219,7 @@ def test_runner_passes_runtime_context_to_publication_fn(tmp_path):
     patches["palimpsest.runner.git.Repo"] = MagicMock()
 
     with _apply_patches(patches)[0]:
-        _run_job_from_spec(config, spec_capture, tmp_path)
+        _run_job_from_spec(config, spec_capture, tmp_path, bundle_workspace="", target_workspace="")
 
     assert "runtime_context" in captured
     ctx = captured["runtime_context"]
@@ -250,7 +250,7 @@ def test_runner_calls_cleanup_on_success(tmp_path):
 
     with patch.object(RuntimeContext, "cleanup", track_cleanup):
         with _apply_patches(patches)[0]:
-            _run_job_from_spec(config, spec, tmp_path)
+            _run_job_from_spec(config, spec, tmp_path, bundle_workspace="", target_workspace="")
 
     assert len(cleanup_called) == 1
 
@@ -277,7 +277,7 @@ def test_runner_calls_cleanup_on_failure(tmp_path):
     with patch.object(RuntimeContext, "cleanup", track_cleanup):
         with _apply_patches(patches)[0]:
             with pytest.raises(RuntimeError):
-                _run_job_from_spec(config, spec, tmp_path)
+                _run_job_from_spec(config, spec, tmp_path, bundle_workspace="", target_workspace="")
 
     # Cleanup should still have been called
     assert len(cleanup_called) == 1
@@ -324,7 +324,7 @@ def test_runtime_context_can_be_used_by_preparation_fn(tmp_path):
     patches["palimpsest.runner.git.Repo"] = MagicMock()
 
     with _apply_patches(patches)[0]:
-        _run_job_from_spec(config, spec_resources, tmp_path)
+        _run_job_from_spec(config, spec_resources, tmp_path, bundle_workspace="", target_workspace="")
 
     # prep should have set the resource
     assert resources_at_prep[0]["custom_connection"] == "connected!"
@@ -362,6 +362,6 @@ def test_runner_uses_task_id_from_config(tmp_path):
     patches["palimpsest.runner.git.Repo"] = MagicMock()
 
     with _apply_patches(patches)[0]:
-        _run_job_from_spec(config, spec_capture, tmp_path)
+        _run_job_from_spec(config, spec_capture, tmp_path, bundle_workspace="", target_workspace="")
 
     assert captured["ctx"].task_id == "custom-task-456"
