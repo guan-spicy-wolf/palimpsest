@@ -54,6 +54,7 @@ from palimpsest.runtime import (
     RoleManager,
     UnifiedToolGateway,
 )
+from palimpsest.runtime.capability import JobContext, get_capability, BUILTIN_CAPABILITIES
 from palimpsest.runtime.roles import JobSpec
 from palimpsest.stages import (
     build_context,
@@ -78,17 +79,41 @@ class ControlledJobFailure(Exception):
 
 
 def run_job(config: JobConfig) -> None:
-    """Resolve the role into a JobSpec and execute the four-stage pipeline."""
-    with _materialize_evo_root(config.evo_sha) as (evo_path, resolved_evo_sha):
-        resolver = RoleManager(evo_path, bundle=config.bundle)
-        spec = resolver.resolve(config.role, **dict(config.role_params or {}))
+    """Resolve the role into a JobSpec and execute the four-stage pipeline.
+    
+    Per ADR-0015: bundle workspace is for code loading, target workspace for execution.
+    Trenni clones repos, Palimpsest just uses the paths.
+    """
+    # ADR-0015: Use bundle_source/target_source from config (Trenni prepared)
+    bundle_workspace = ""
+    target_workspace = ""
+    
+    if config.bundle_source:
+        bundle_workspace = config.bundle_source.workspace
+    if config.target_source:
+        target_workspace = config.target_source.workspace
+    
+    # Backward compat: if no bundle_source, use evo_sha to find evo
+    evo_path = Path(bundle_workspace) if bundle_workspace else Path(_EVO_DIR)
+    
+    resolver = RoleManager(evo_path, bundle=config.bundle)
+    spec = resolver.resolve(config.role, **dict(config.role_params or {}))
 
-        logger.info(
-            f"Resolved role '{config.role}' -> JobSpec "
-            f"(source_role={spec.source_role!r}, tools={spec.tools})"
-        )
+    logger.info(
+        f"Resolved role '{config.role}' -> JobSpec "
+        f"(source_role={spec.source_role!r}, tools={spec.tools})"
+    )
 
-        _run_job_from_spec(config, spec, evo_path, resolved_evo_sha=resolved_evo_sha)
+    # Get role metadata for needs
+    role_meta = resolver.get_definition(config.role)
+    needs = role_meta.needs if role_meta else []
+    
+    _run_job_from_spec(
+        config, spec, evo_path, 
+        bundle_workspace=bundle_workspace,
+        target_workspace=target_workspace,
+        needs=needs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -96,8 +121,15 @@ def run_job(config: JobConfig) -> None:
 # ---------------------------------------------------------------------------
 
 def _run_job_from_spec(
-    config: JobConfig, spec: JobSpec, evo_path: Path, *, resolved_evo_sha: str | None = None
+    config: JobConfig,
+    spec: JobSpec,
+    evo_path: Path,
+    *,
+    bundle_workspace: str = "",
+    target_workspace: str = "",
+    needs: list[str] = [],
 ) -> None:
+    """Execute the four-stage pipeline with capability model (ADR-0016)."""
     job_id = config.job_id
     if not job_id:
         raise ValueError("Job ID must be specified in the configuration.")
@@ -106,16 +138,11 @@ def _run_job_from_spec(
     task_id = config.task_id or job_id
     gateway = EventGateway(emitter, job_id, task_id)
 
-    evo_sha = resolved_evo_sha or _read_evo_sha(evo_path)
-    logger.info(f"Starting job {job_id} (evo={evo_sha[:8] if evo_sha else '?'})")
+    logger.info(f"Starting job {job_id} (bundle={config.bundle}, needs={needs})")
 
-    # Make evo importable as a package root so role/tool/context modules can
-    # `from <bundle>.lib... import ...` against the materialized evo tree.
-    # This is the MVP single-bundle bridge; Phase 2 multi-bundle will replace
-    # this with per-bundle sys.path injection.
-    evo_path_str = str(evo_path)
-    if evo_path_str not in sys.path:
-        sys.path.insert(0, evo_path_str)
+    # ADR-0015: Make bundle workspace importable for role/tool/context modules
+    if bundle_workspace and bundle_workspace not in sys.path:
+        sys.path.insert(0, bundle_workspace)
 
     _install_timeout(config.timeout)
 
