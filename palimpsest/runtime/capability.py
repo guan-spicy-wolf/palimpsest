@@ -15,7 +15,7 @@ from typing import Protocol, runtime_checkable, Any
 
 from loguru import logger
 
-from yoitsu_contracts import FinalizeResult, EventData, AnalyzerVersion
+from yoitsu_contracts import FinalizeResult, EventData, AnalyzerVersion, TargetSource
 
 
 @runtime_checkable
@@ -51,6 +51,7 @@ class JobContext:
     - Workspaces (bundle and target)
     - Resources dict for capability-shared state
     - analyzer_version for observation emission (ADR-0017)
+    - role_type for capability behavior differentiation (ADR-0016)
     """
     job_id: str
     task_id: str
@@ -61,13 +62,8 @@ class JobContext:
     target_workspace: str = ""
     resources: dict[str, Any] = field(default_factory=dict)
     analyzer_version: AnalyzerVersion | None = None  # ADR-0017
-    # Backward compatibility
-    workspace_path: str = ""  # DEPRECATED: use target_workspace
-    
-    @property
-    def workspace(self) -> str:
-        """Backward compatibility alias for target_workspace."""
-        return self.target_workspace or self.workspace_path
+    target_source: TargetSource | None = None  # For artifact URI construction
+    role_type: str = "worker"  # For hallucination gate behavior (worker vs planner/evaluator)
 
 
 # === Built-in Capabilities ===
@@ -128,13 +124,15 @@ class GitWorkspaceCapability:
             # No changes
             # Worker role: hallucination = success=False
             # Planner/Evaluator: expected, success=True
-            # For now: assume worker behavior (success=False)
+            is_worker = ctx.role_type == "worker"
             events.append(EventData(type="publication.skipped", data={
                 "reason": "no_changes",
-                "workspace": str(workspace)
+                "workspace": str(workspace),
+                "role_type": ctx.role_type,
             }))
-            # TODO: distinguish by role_type
-            return FinalizeResult(events=events, success=False)
+            # Worker without changes = hallucination = failure
+            # Non-worker (planner/evaluator) without changes = expected = success
+            return FinalizeResult(events=events, success=not is_worker)
         
         # Commit
         sha_before = subprocess.check_output(
@@ -172,10 +170,11 @@ class GitWorkspaceCapability:
                     check=True,
                     capture_output=True
                 )
-                # Success: artifact URI points to remote
-                # TODO: get actual remote URL
+                # Success: artifact URI points to remote repo, not ephemeral workspace
+                repo_uri = ctx.target_source.repo_uri if ctx.target_source else ""
+                artifact_ref = f"{repo_uri}@{sha_after}" if repo_uri else f"git_commit:{sha_after}"
                 events.append(EventData(type="artifact.published", data={
-                    "ref": f"git_commit:{sha_after}",
+                    "ref": artifact_ref,
                     "relation": "workspace_output",
                     "workspace": str(workspace)
                 }))

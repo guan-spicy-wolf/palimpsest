@@ -55,7 +55,7 @@ from palimpsest.runtime import (
     UnifiedToolGateway,
 )
 from palimpsest.runtime.capability import JobContext, get_capability, BUILTIN_CAPABILITIES
-from yoitsu_contracts import AnalyzerVersion
+from yoitsu_contracts import AnalyzerVersion, RoleMetadata
 from palimpsest.runtime.roles import JobSpec
 from palimpsest.stages import (
     build_context,
@@ -114,6 +114,7 @@ def run_job(config: JobConfig) -> None:
         bundle_workspace=bundle_workspace,
         target_workspace=target_workspace,
         needs=needs,
+        role_meta=role_meta,
     )
 
 
@@ -129,6 +130,7 @@ def _run_job_from_spec(
     bundle_workspace: str = "",
     target_workspace: str = "",
     needs: list[str] = [],
+    role_meta: RoleMetadata | None = None,
 ) -> None:
     """Execute the four-stage pipeline with capability model (ADR-0016).
     
@@ -164,6 +166,7 @@ def _run_job_from_spec(
     )
 
     # Create JobContext for capabilities (ADR-0016)
+    role_type = role_meta.role_type if role_meta else "worker"
     cap_ctx = JobContext(
         job_id=job_id,
         task_id=task_id,
@@ -174,6 +177,8 @@ def _run_job_from_spec(
         target_workspace=target_workspace,
         resources={},  # Populated by capabilities
         analyzer_version=config.analyzer_version,  # ADR-0017
+        target_source=config.target_source,  # For artifact URI
+        role_type=role_type,  # For hallucination gate behavior
     )
 
     workspace: str | None = None

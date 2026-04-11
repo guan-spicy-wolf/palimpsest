@@ -135,7 +135,7 @@ def bash(command: str, workspace: str, config: ToolsConfig | None = None) -> Too
 
 
 
-def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str) -> SpawnTaskData:
+def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, bundle_sha: str) -> SpawnTaskData:
     """Normalize spawn task to canonical SpawnTaskData.
 
     Only canonical fields are accepted:
@@ -217,9 +217,9 @@ def _normalize_spawn_task(task: dict[str, Any], *, workspace: str, evo_sha: str)
         except Exception:
             pass
 
-    # Infer sha from evo_sha if not provided
-    if not sha and evo_sha:
-        sha = evo_sha
+    # Infer sha from bundle_sha if not provided
+    if not sha and bundle_sha:
+        sha = bundle_sha
 
     return SpawnTaskData(
         goal=goal,
@@ -334,34 +334,26 @@ def spawn(
     tasks: list,
     workspace: str,
     gateway: EventGateway,
-    evo_root: str = "",
-    evo_sha: str = "",
-    bundle_workspace: str = "",  # ADR-0015: new parameter
-    bundle_sha: str = "",  # ADR-0015: new parameter
+    bundle_workspace: str = "",
+    bundle_sha: str = "",
     wait_for: str = "all_complete",
     on_fail: str = "continue",
 ) -> ToolResult:
     """Request the Supervisor to spawn child tasks. Each child runs in an isolated git clone; the runtime auto-commits and pushes on success."""
-    # Backward compat: if bundle_workspace provided, use it
-    if not evo_root and bundle_workspace:
-        evo_root = bundle_workspace
-    if not evo_sha and bundle_sha:
-        evo_sha = bundle_sha
-    
     if not tasks:
         return ToolResult(success=False, output="No tasks provided to spawn")
 
-    if not evo_sha:
+    if not bundle_sha:
         try:
-            evo_sha = git.Repo(Path(evo_root)).head.commit.hexsha
+            bundle_sha = git.Repo(Path(bundle_workspace)).head.commit.hexsha
         except Exception:
-            evo_sha = ""
+            bundle_sha = ""
 
     normalized_tasks: list[SpawnTaskData] = []
     try:
         for task in tasks:
             normalized_tasks.append(
-                _normalize_spawn_task(task, workspace=workspace, evo_sha=evo_sha)
+                _normalize_spawn_task(task, workspace=workspace, bundle_sha=bundle_sha)
             )
     except ValueError as exc:
         return ToolResult(success=False, output=str(exc))
@@ -655,11 +647,6 @@ class UnifiedToolGateway:
                 kwargs["bundle_workspace"] = str(self._bundle_workspace)
             if "bundle_sha" in sig.parameters:
                 kwargs["bundle_sha"] = self._bundle_sha
-            # Backward compat: support old evo_root/evo_sha signatures
-            if "evo_root" in sig.parameters and "bundle_workspace" not in kwargs:
-                kwargs["evo_root"] = str(self._bundle_workspace)
-            if "evo_sha" in sig.parameters and "bundle_sha" not in kwargs:
-                kwargs["evo_sha"] = self._bundle_sha
             if "runtime_context" in sig.parameters and runtime_context is not None:
                 kwargs["runtime_context"] = runtime_context
 
