@@ -327,6 +327,8 @@ def _stage_interaction_and_publication(
             repetitions = detect_repetition(tool_call_history)
             for r in repetitions:
                 if runtime_context:
+                    # ADR-0017: get analyzer_version from config
+                    analyzer_version = config.analyzer_version
                     event = ObservationToolRepetitionEvent(
                         job_id=job_id,
                         task_id=config.task_id or job_id,
@@ -336,6 +338,9 @@ def _stage_interaction_and_publication(
                         call_count=r.call_count,
                         arg_pattern=r.arg_pattern,
                         similarity=r.similarity,
+                        analyzer_version_bundle_sha=analyzer_version.bundle_sha if analyzer_version else "",
+                        analyzer_version_trenni_sha=analyzer_version.trenni_sha if analyzer_version else "",
+                        analyzer_version_palimpsest_sha=analyzer_version.palimpsest_sha if analyzer_version else "",
                     )
                     gateway.emit(event)
             return result, None
@@ -366,6 +371,8 @@ def _stage_interaction_and_publication(
             repetitions = detect_repetition(tool_call_history)
             for r in repetitions:
                 if runtime_context:
+                    # ADR-0017: get analyzer_version from config
+                    analyzer_version = config.analyzer_version
                     event = ObservationToolRepetitionEvent(
                         job_id=job_id,
                         task_id=config.task_id or job_id,
@@ -375,6 +382,9 @@ def _stage_interaction_and_publication(
                         call_count=r.call_count,
                         arg_pattern=r.arg_pattern,
                         similarity=r.similarity,
+                        analyzer_version_bundle_sha=analyzer_version.bundle_sha if analyzer_version else "",
+                        analyzer_version_trenni_sha=analyzer_version.trenni_sha if analyzer_version else "",
+                        analyzer_version_palimpsest_sha=analyzer_version.palimpsest_sha if analyzer_version else "",
                     )
                     gateway.emit(event)
             
