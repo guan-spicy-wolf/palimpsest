@@ -129,7 +129,15 @@ def _run_job_from_spec(
     target_workspace: str = "",
     needs: list[str] = [],
 ) -> None:
-    """Execute the four-stage pipeline with capability model (ADR-0016)."""
+    """Execute the four-stage pipeline with capability model (ADR-0016).
+    
+    Per ADR-0016: capability provides setup/finalize lifecycle.
+    - setup() returns events, runtime emits
+    - finalize() returns FinalizeResult(events, success)
+    - success=False → job.failed
+    
+    Backward compat: if needs=[], use old preparation/publication fn.
+    """
     job_id = config.job_id
     if not job_id:
         raise ValueError("Job ID must be specified in the configuration.")
@@ -154,53 +162,89 @@ def _run_job_from_spec(
         role=config.role,
     )
 
+    # Create JobContext for capabilities (ADR-0016)
+    cap_ctx = JobContext(
+        job_id=job_id,
+        task_id=task_id,
+        bundle=config.bundle,
+        role=config.role,
+        goal=config.goal,
+        bundle_workspace=bundle_workspace,
+        target_workspace=target_workspace,
+        resources={},  # Populated by capabilities
+    )
+
     workspace: str | None = None
     llm = _setup_llm(config, gateway)
     cost_tracking_degraded = llm.cost_tracking_degraded()
+    all_success = True  # Track capability finalize success
+    
     try:
-        # goal is config.goal, passed explicitly to preparation_fn and context_fn
         role_params = dict(config.role_params or {})
-        branch_prefix = str(
-            role_params.get("branch_prefix")
-            or getattr(spec.publication_fn, "__publication_branch_prefix__", config.publication.branch_prefix)
-        )
-
-        # Stage 1: Preparation (emits stage-transition + job-started internally)
-        prep_params = {
-            "goal": config.goal,
-            "repo": config.workspace.repo,
-            "init_branch": config.workspace.init_branch,
-            **role_params,
-        }
-        prep_sig = inspect.signature(spec.preparation_fn)
-        if "runtime_context" in prep_sig.parameters:
-            prep_params["runtime_context"] = runtime_context
-        if "evo_root" in prep_sig.parameters:
-            prep_params["evo_root"] = str(evo_path)
-        workspace_cfg = spec.preparation_fn(**prep_params)
-        # ADR-0015: workspace_override abolished, workspace always ephemeral
-        workspace = setup_workspace(
-            job_id,
-            workspace_cfg,
-            branch_prefix,
-            task_id=config.task_id or job_id,
-            goal=config.goal,
-            gateway=gateway,
-            evo_sha=evo_sha,
-            cost_tracking_degraded=cost_tracking_degraded,
-        )
+        
+        # ADR-0016: Stage 1 - Capability setup
+        if needs:
+            for cap_name in needs:
+                cap = get_capability(cap_name)
+                if cap:
+                    try:
+                        events = cap.setup(cap_ctx)
+                        for evt in events:
+                            gateway.emit(evt)
+                    except Exception as e:
+                        logger.error(f"Capability {cap_name} setup failed: {e}")
+                        gateway.emit(
+                            RuntimeIssueData(
+                                stage="setup",
+                                fatal=True,
+                                code=f"{cap_name}_setup_failed",
+                                error=str(e),
+                            )
+                        )
+                        raise ControlledJobFailure(
+                            f"Capability {cap_name} setup failed: {e}",
+                            code="capability_setup",
+                        )
+            workspace = target_workspace  # Use Trenni-prepared workspace
+        else:
+            # Backward compat: use old preparation_fn
+            branch_prefix = str(
+                role_params.get("branch_prefix")
+                or getattr(spec.publication_fn, "__publication_branch_prefix__", config.publication.branch_prefix)
+            )
+            prep_params = {
+                "goal": config.goal,
+                "repo": config.workspace.repo,
+                "init_branch": config.workspace.init_branch,
+                **role_params,
+            }
+            prep_sig = inspect.signature(spec.preparation_fn)
+            if "runtime_context" in prep_sig.parameters:
+                prep_params["runtime_context"] = runtime_context
+            if "evo_root" in prep_sig.parameters:
+                prep_params["evo_root"] = str(evo_path)
+            workspace_cfg = spec.preparation_fn(**prep_params)
+            workspace = setup_workspace(
+                job_id,
+                workspace_cfg,
+                branch_prefix,
+                task_id=config.task_id or job_id,
+                goal=config.goal,
+                gateway=gateway,
+                cost_tracking_degraded=cost_tracking_degraded,
+            )
+            cap_ctx.target_workspace = workspace
 
         # ADR-0011: set workspace_path after workspace setup
         runtime_context.workspace_path = workspace
 
-        # Capture base SHA before any agent modifications (used by guardrails).
+        # Capture base SHA before agent modifications
         try:
             base_sha = git.Repo(workspace).head.commit.hexsha
         except Exception:
             base_sha = ""
 
-        # Stage 2: Context (emits stage-transition internally)
-        # Per ADR-0007: goal passed explicitly, not via role_params
+        # Stage 2: Context (for LLM prompt, not a capability)
         context_spec = spec.context_fn(
             workspace=workspace,
             job_id=job_id,
@@ -213,36 +257,84 @@ def _run_job_from_spec(
             job_id, workspace, config.goal, context_spec, config, gateway, evo_root=evo_path,
         )
 
-        # Stage 3+4: Interaction and publication
-        tools = _setup_tools(config, spec, evo_path, evo_sha, gateway, config.bundle)
-        result, git_ref = _stage_interaction_and_publication(
-            job_id, context, workspace, config, spec, gateway, tools, llm,
-            base_sha=base_sha,
-            role_params=role_params,
-            runtime_context=runtime_context,
-        )
-
-        gateway.emit(
-            JobCompletedData(
-                git_ref=git_ref,
-                summary=result.get("summary", ""),
-                status=str(result.get("status", "complete") or "complete"),
-                code=str(result.get("code", "") or ""),
-                budget_dim=str(result.get("budget_dim", "") or ""),
-                cost_tracking_degraded=cost_tracking_degraded,
-                cost=llm.total_cost,  # ADR-0010: actual cost for budget_variance
-                artifact_bindings=result.get("artifact_bindings", []),  # ADR-0013
-                tool_call_history=result.get("tool_call_history", []),  # ADR-0017: for observation analysis
+        # Stage 3: Interaction
+        tools = _setup_tools(config, spec, evo_path, "", gateway, config.bundle)
+        
+        if needs:
+            # ADR-0016: capability path - no publication_fn, interaction only
+            result = run_interaction_loop(
+                job_id, context, workspace, llm, tools,
+                runtime_context=runtime_context,
             )
-        )
-        logger.info(f"Job {job_id} completed")
+            git_ref = ""
+        else:
+            # Backward compat: use old _stage_interaction_and_publication
+            result, git_ref = _stage_interaction_and_publication(
+                job_id, context, workspace, config, spec, gateway, tools, llm,
+                base_sha=base_sha,
+                role_params=role_params,
+                runtime_context=runtime_context,
+            )
+        
+        # ADR-0016: Stage 4 - Capability finalize
+        if needs:
+            for cap_name in needs:
+                cap = get_capability(cap_name)
+                if cap:
+                    try:
+                        finalize_result = cap.finalize(cap_ctx)
+                        for evt in finalize_result.events:
+                            gateway.emit(evt)
+                        if not finalize_result.success:
+                            all_success = False
+                            logger.warning(f"Capability {cap_name} finalize returned success=False")
+                    except Exception as e:
+                        logger.error(f"Capability {cap_name} finalize failed: {e}")
+                        gateway.emit(
+                            RuntimeIssueData(
+                                stage="finalize",
+                                fatal=True,
+                                code=f"{cap_name}_finalize_failed",
+                                error=str(e),
+                            )
+                        )
+                        all_success = False
+            # git_ref from capability finalize (e.g., GitWorkspaceCapability)
+        else:
+            # Backward compat: no needs, old behavior
+            # git_ref is data field, not success indicator
+            # _stage_interaction_and_publication handles guardrail retry
+            all_success = True  # Old path: always complete (exceptions handled above)
+
+        # Emit completion
+        if all_success:
+            gateway.emit(
+                JobCompletedData(
+                    git_ref=git_ref,
+                    summary=result.get("summary", ""),
+                    status=str(result.get("status", "complete") or "complete"),
+                    code=str(result.get("code", "") or ""),
+                    budget_dim=str(result.get("budget_dim", "") or ""),
+                    cost_tracking_degraded=cost_tracking_degraded,
+                    cost=llm.total_cost,
+                    artifact_bindings=result.get("artifact_bindings", []),
+                    tool_call_history=result.get("tool_call_history", []),
+                )
+            )
+            logger.info(f"Job {job_id} completed")
+        else:
+            gateway.emit(
+                JobFailedData(
+                    error="Capability finalize returned success=False",
+                    code="finalize_failed",
+                )
+            )
+            logger.warning(f"Job {job_id} failed (finalize success=False)")
 
     except ControlledJobFailure as exc:
         error_msg = str(exc)
         logger.error(f"Job {job_id} failed: {error_msg}")
-        gateway.emit(
-            JobFailedData(error=error_msg, code=exc.code)
-        )
+        gateway.emit(JobFailedData(error=error_msg, code=exc.code))
         raise
 
     except _JobTimeout:
@@ -253,25 +345,19 @@ def _run_job_from_spec(
                 code="timeout",
             )
         )
-        raise ControlledJobFailure(
-            f"Job timed out after {config.timeout}s", code="timeout"
-        )
+        raise ControlledJobFailure(f"Job timed out after {config.timeout}s", code="timeout")
 
     except Exception as exc:
         error_msg = str(exc)
         tb_str = traceback.format_exc()
         logger.exception(f"Job {job_id} failed")
-        gateway.emit(
-            JobFailedData(error=error_msg, traceback=tb_str)
-        )
+        gateway.emit(JobFailedData(error=error_msg, traceback=tb_str))
         raise
 
     finally:
-        # ADR-0011: cleanup RuntimeContext first, then workspace
         if 'runtime_context' in locals():
             runtime_context.cleanup()
-        if workspace:
-            # ADR-0015: workspace_override abolished, always ephemeral cleanup
+        if workspace and not needs:  # Old cleanup for backward compat path
             finalize_workspace_after_job(workspace, gateway=gateway)
         gateway.close()
 
