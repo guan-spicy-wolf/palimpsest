@@ -15,7 +15,7 @@ from typing import Protocol, runtime_checkable, Any
 
 from loguru import logger
 
-from yoitsu_contracts import FinalizeResult, EventData
+from yoitsu_contracts import FinalizeResult, EventData, AnalyzerVersion
 
 
 @runtime_checkable
@@ -50,6 +50,7 @@ class JobContext:
     - Job configuration
     - Workspaces (bundle and target)
     - Resources dict for capability-shared state
+    - analyzer_version for observation emission (ADR-0017)
     """
     job_id: str
     task_id: str
@@ -59,6 +60,7 @@ class JobContext:
     bundle_workspace: str = ""
     target_workspace: str = ""
     resources: dict[str, Any] = field(default_factory=dict)
+    analyzer_version: AnalyzerVersion | None = None  # ADR-0017
     # Backward compatibility
     workspace_path: str = ""  # DEPRECATED: use target_workspace
     

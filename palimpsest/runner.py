@@ -55,6 +55,7 @@ from palimpsest.runtime import (
     UnifiedToolGateway,
 )
 from palimpsest.runtime.capability import JobContext, get_capability, BUILTIN_CAPABILITIES
+from yoitsu_contracts import AnalyzerVersion
 from palimpsest.runtime.roles import JobSpec
 from palimpsest.stages import (
     build_context,
@@ -172,6 +173,7 @@ def _run_job_from_spec(
         bundle_workspace=bundle_workspace,
         target_workspace=target_workspace,
         resources={},  # Populated by capabilities
+        analyzer_version=config.analyzer_version,  # ADR-0017
     )
 
     workspace: str | None = None
