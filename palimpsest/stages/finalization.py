@@ -16,19 +16,14 @@ def finalize_workspace_after_job(
     gateway: EventGateway | None = None,
     *,
     keep_env: str = "PALIMPSEST_KEEP_WORKSPACE",
-    is_override: bool = False,  # NEW: 阻止删除 workspace_override 路径
 ) -> str | None:
     """Best-effort cleanup for one-shot sandbox jobs.
 
     When *gateway* is provided, emits a runtime-issue event on failure
     so the runner does not have to.
     
-    Per plan Task 3.3: if is_override=True, skip rmtree entirely.
-    This prevents accidental deletion of live bundle directories.
+    Per ADR-0015: workspace_override abolished, always ephemeral cleanup.
     """
-    if is_override:
-        logger.info(f"Skipping cleanup for override workspace: {workspace_path}")
-        return None
 
     if os.environ.get(keep_env, "").strip() in {"1", "true", "yes"}:
         logger.info(f"Keeping workspace due to {keep_env}=1: {workspace_path}")

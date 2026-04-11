@@ -128,7 +128,6 @@ def _run_job_from_spec(
     )
 
     workspace: str | None = None
-    is_override_workspace = False  # NEW: cached from workspace_cfg for finalization
     llm = _setup_llm(config, gateway)
     cost_tracking_degraded = llm.cost_tracking_degraded()
     try:
@@ -152,7 +151,7 @@ def _run_job_from_spec(
         if "evo_root" in prep_sig.parameters:
             prep_params["evo_root"] = str(evo_path)
         workspace_cfg = spec.preparation_fn(**prep_params)
-        is_override_workspace = bool(workspace_cfg.workspace_override)  # Cache for finalization
+        # ADR-0015: workspace_override abolished, workspace always ephemeral
         workspace = setup_workspace(
             job_id,
             workspace_cfg,
@@ -244,7 +243,8 @@ def _run_job_from_spec(
         if 'runtime_context' in locals():
             runtime_context.cleanup()
         if workspace:
-            finalize_workspace_after_job(workspace, gateway=gateway, is_override=is_override_workspace)
+            # ADR-0015: workspace_override abolished, always ephemeral cleanup
+            finalize_workspace_after_job(workspace, gateway=gateway)
         gateway.close()
 
 
