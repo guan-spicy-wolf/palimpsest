@@ -51,7 +51,22 @@ class JobContext:
     - Workspaces (bundle and target)
     - Resources dict for capability-shared state
     - analyzer_version for observation emission (ADR-0017)
+    - target_source for artifact URI construction (ADR-0015)
     - role_type for capability behavior differentiation (ADR-0016)
+    
+    ## Hallucination Gate Contract (role_type)
+    
+    The `role_type` field determines hallucination gate behavior in git_workspace:
+    - "worker": No changes = failure (hallucination, expected to produce output)
+    - "planner"/"evaluator": No changes = success (no modifications expected)
+    
+    This field is populated from RoleMetadata.role_type, which defaults to "worker".
+    The role_type is set by the @role decorator's role_type parameter:
+    
+        @role(name="planner", role_type="planner", ...)
+        def planner_role(...): ...
+    
+    If role_meta is unavailable (e.g., role not found), defaults to "worker".
     """
     job_id: str
     task_id: str
@@ -121,14 +136,20 @@ class GitWorkspaceCapability:
         )
         
         if result.returncode == 0:
-            # No changes
-            # Worker role: hallucination = success=False
-            # Planner/Evaluator: expected, success=True
+            # No changes - Hallucination Gate
+            # Per ADR-0015 §2.5: Worker role should produce output; no output = hallucination.
+            # Planner/evaluator roles may not produce output (read-only analysis).
+            # The role_type field is populated from RoleMetadata.role_type (see JobContext docstring).
             is_worker = ctx.role_type == "worker"
+            logger.info(
+                f"Hallucination gate: no changes detected, role_type={ctx.role_type}, "
+                f"treating as {'failure (hallucination)' if is_worker else 'success (expected)'}"
+            )
             events.append(EventData(type="publication.skipped", data={
                 "reason": "no_changes",
                 "workspace": str(workspace),
                 "role_type": ctx.role_type,
+                "is_hallucination": is_worker,
             }))
             # Worker without changes = hallucination = failure
             # Non-worker (planner/evaluator) without changes = expected = success
@@ -170,9 +191,27 @@ class GitWorkspaceCapability:
                     check=True,
                     capture_output=True
                 )
-                # Success: artifact URI points to remote repo, not ephemeral workspace
-                repo_uri = ctx.target_source.repo_uri if ctx.target_source else ""
-                artifact_ref = f"{repo_uri}@{sha_after}" if repo_uri else f"git_commit:{sha_after}"
+                # Success: artifact URI must point to remote repo (ADR-0015 §2.8)
+                # Per ADR-0015: artifact URIs must NOT use ephemeral workspace paths.
+                # If target_source.repo_uri is missing, this is a configuration error.
+                if not ctx.target_source or not ctx.target_source.repo_uri:
+                    logger.error(
+                        f"Cannot construct artifact URI: target_source.repo_uri is missing. "
+                        f"job_id={ctx.job_id}, workspace={workspace}"
+                    )
+                    events.append(EventData(type="finalize.failed", data={
+                        "capability": self.name,
+                        "stage": "artifact_uri",
+                        "error": "target_source.repo_uri is required for artifact publication "
+                                  "but was not provided. This indicates a configuration error: "
+                                  "the job has changes to publish but no remote repo URI configured.",
+                        "local_commit_sha": sha_after,
+                        "artifact_persisted": True,  # Local commit exists
+                        "retry_possible": False,
+                    }))
+                    return FinalizeResult(events=events, success=False)
+                
+                artifact_ref = f"{ctx.target_source.repo_uri}@{sha_after}"
                 events.append(EventData(type="artifact.published", data={
                     "ref": artifact_ref,
                     "relation": "workspace_output",
