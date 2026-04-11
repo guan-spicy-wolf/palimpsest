@@ -205,6 +205,7 @@ def _run_job_from_spec(
                 cost_tracking_degraded=cost_tracking_degraded,
                 cost=llm.total_cost,  # ADR-0010: actual cost for budget_variance
                 artifact_bindings=result.get("artifact_bindings", []),  # ADR-0013
+                tool_call_history=result.get("tool_call_history", []),  # ADR-0017: for observation analysis
             )
         )
         logger.info(f"Job {job_id} completed")
@@ -293,8 +294,6 @@ def _stage_interaction_and_publication(
 ) -> tuple[dict, str]:
     """Stage 3+4: interaction loop with publication recovery. Returns (result, git_ref)."""
     from palimpsest.events import StageTransitionData
-    from palimpsest.runtime.tool_pattern import detect_repetition
-    from yoitsu_contracts.observation import ObservationToolRepetitionEvent
     gateway.emit(StageTransitionData(from_stage="context", to_stage="interaction"))
 
     interaction_messages: list[dict] | None = None
@@ -322,27 +321,8 @@ def _stage_interaction_and_publication(
         )
         should_publish = publication_strategy != "skip"
         if not should_publish:
-            # Emit observation events for detected patterns (no publication)
-            tool_call_history = result.get("tool_call_history", [])
-            repetitions = detect_repetition(tool_call_history)
-            for r in repetitions:
-                if runtime_context:
-                    # ADR-0017: get analyzer_version from config
-                    analyzer_version = config.analyzer_version
-                    event = ObservationToolRepetitionEvent(
-                        job_id=job_id,
-                        task_id=config.task_id or job_id,
-                        role=runtime_context.role,
-                        bundle=runtime_context.bundle,
-                        tool_name=r.tool_name,
-                        call_count=r.call_count,
-                        arg_pattern=r.arg_pattern,
-                        similarity=r.similarity,
-                        analyzer_version_bundle_sha=analyzer_version.bundle_sha if analyzer_version else "",
-                        analyzer_version_trenni_sha=analyzer_version.trenni_sha if analyzer_version else "",
-                        analyzer_version_palimpsest_sha=analyzer_version.palimpsest_sha if analyzer_version else "",
-                    )
-                    gateway.emit(event)
+            # No publication: return result directly
+            # Tool repetition analysis will be done by Trenni post-job (ADR-0017)
             return result, None
 
         gateway.emit(StageTransitionData(from_stage="interaction", to_stage="publication"))
@@ -366,28 +346,7 @@ def _stage_interaction_and_publication(
             )
             result["artifact_bindings"] = artifact_bindings or []
             
-            # Emit observation events for detected patterns
-            tool_call_history = result.get("tool_call_history", [])
-            repetitions = detect_repetition(tool_call_history)
-            for r in repetitions:
-                if runtime_context:
-                    # ADR-0017: get analyzer_version from config
-                    analyzer_version = config.analyzer_version
-                    event = ObservationToolRepetitionEvent(
-                        job_id=job_id,
-                        task_id=config.task_id or job_id,
-                        role=runtime_context.role,
-                        bundle=runtime_context.bundle,
-                        tool_name=r.tool_name,
-                        call_count=r.call_count,
-                        arg_pattern=r.arg_pattern,
-                        similarity=r.similarity,
-                        analyzer_version_bundle_sha=analyzer_version.bundle_sha if analyzer_version else "",
-                        analyzer_version_trenni_sha=analyzer_version.trenni_sha if analyzer_version else "",
-                        analyzer_version_palimpsest_sha=analyzer_version.palimpsest_sha if analyzer_version else "",
-                    )
-                    gateway.emit(event)
-            
+            # Tool repetition analysis will be done by Trenni post-job (ADR-0017)
             return result, git_ref
         except PublicationGuardrailViolation as exc:
             can_retry = publication_recovery_attempts < max_recovery_attempts
