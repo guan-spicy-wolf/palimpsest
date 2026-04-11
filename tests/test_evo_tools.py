@@ -17,15 +17,15 @@ EVO_ROOT = Path(__file__).parent / "fixtures" / "evo"
 def test_task_complete_tool_is_removed():
     """task_complete tool no longer exists (was removed in earlier refactor)."""
     from palimpsest.runtime.tools import resolve_tool_functions
-    funcs = resolve_tool_functions(EVO_ROOT, "", ["task_complete"])
+    funcs = resolve_tool_functions(EVO_ROOT, ["task_complete"])
     assert funcs == {}
 
 
 def test_unified_tool_gateway_treats_builtin_tools_as_builtin(monkeypatch):
-    """Builtin tools (spawn, create_pr) are not resolved from evo directory."""
+    """Builtin tools (spawn, create_pr) are not resolved from bundle directory."""
     requested = []
 
-    def fake_resolve_tool_functions(_bundle_workspace, _bundle, names):
+    def fake_resolve_tool_functions(bundle_workspace, names):
         requested.append(list(names))
         return {}
 
@@ -38,12 +38,11 @@ def test_unified_tool_gateway_treats_builtin_tools_as_builtin(monkeypatch):
     gateway = UnifiedToolGateway(
         config=ToolsConfig(),
         bundle_workspace=EVO_ROOT,
-        bundle="",
         requested_evo_tools=["spawn", "create_pr", "read_file"],
         gateway=FakeGateway(),
     )
 
-    # Only read_file should be resolved from evo (spawn/create_pr are builtin)
+    # Only read_file should be resolved from bundle (spawn/create_pr are builtin)
     assert requested == [["read_file"]]
     schemas = gateway.schema()
     assert any(item["function"]["name"] == "spawn" for item in schemas)

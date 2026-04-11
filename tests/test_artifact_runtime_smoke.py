@@ -405,7 +405,7 @@ def test_spawn_tool_accepts_input_artifacts():
         }
 
         # Normalize the task
-        normalized = _normalize_spawn_task(task_dict, workspace="/tmp/test", bundle_sha="")
+        normalized = _normalize_spawn_task(task_dict, workspace="/tmp/test", evo_sha="")
 
         assert len(normalized.input_artifacts) == 1
         assert normalized.input_artifacts[0].ref.digest == ref.digest

@@ -24,24 +24,24 @@ def build_context(
     context_spec: dict,
     job_config: JobConfig,
     gateway: EventGateway,
-    evo_root: Path | None = None,
+    bundle_workspace: Path | None = None,
 ) -> dict:
     """Build LLM context from a resolved JobSpec. Returns {"system": str, "task": str}."""
     from palimpsest.events import StageTransitionData
     gateway.emit(StageTransitionData(from_stage="workspace", to_stage="context"))
 
     system_prompt = context_spec.get("system", "")
-    if isinstance(system_prompt, str) and evo_root is not None:
+    if isinstance(system_prompt, str) and bundle_workspace is not None:
         if system_prompt.endswith(".md") or system_prompt.endswith(".txt"):
-            potential_path = evo_root / system_prompt
+            potential_path = bundle_workspace / system_prompt
             if potential_path.is_file():
                 system_prompt = potential_path.read_text(encoding="utf-8")
     sections = context_spec.get("sections", [])
     section_types = [s.get("type", "") for s in sections]
 
     registry = {}
-    if evo_root:
-        registry = resolve_context_functions(evo_root, section_types, bundle=job_config.bundle)
+    if bundle_workspace:
+        registry = resolve_context_functions(bundle_workspace, section_types)
 
     parts: list[str] = []
     for section in sections:
@@ -65,8 +65,11 @@ def build_context(
                     kwargs["job_config"] = job_config
                 if "eventstore" in sig.parameters:
                     kwargs["eventstore"] = job_config.eventstore
-                if "evo_root" in sig.parameters and evo_root is not None:
-                    kwargs["evo_root"] = str(evo_root)
+                if "bundle_workspace" in sig.parameters and bundle_workspace is not None:
+                    kwargs["bundle_workspace"] = str(bundle_workspace)
+                # Backward compat: support old evo_root signature
+                if "evo_root" in sig.parameters and bundle_workspace is not None and "bundle_workspace" not in kwargs:
+                    kwargs["evo_root"] = str(bundle_workspace)
 
                 content = provider_fn(**kwargs)
                 parts.append(str(content))

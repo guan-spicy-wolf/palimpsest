@@ -41,7 +41,7 @@ def test_job_config_parses_extended_llm_budgets(tmp_path: Path):
     cfg.write_text(
         "job_id: test-job\n"
         "task: test\n"
-        "bundle_sha: abc123\n"
+        "evo_sha: abc123\n"  # Deprecated field, still accepted
         "llm:\n"
         "  max_iterations: 12\n"
         "  max_iterations_hard: 99\n"
@@ -54,7 +54,7 @@ def test_job_config_parses_extended_llm_budgets(tmp_path: Path):
 
     parsed = JobConfig.from_yaml(str(cfg))
 
-    assert parsed.bundle_sha == "abc123"
+    assert parsed.evo_sha == "abc123"  # Deprecated field
     assert parsed.llm.max_iterations == 12
     assert parsed.llm.max_iterations_hard == 99
     assert parsed.llm.iteration_penalty_cost == 0.05

@@ -11,16 +11,19 @@ from palimpsest.runtime.tools import (
 from palimpsest.config import ToolsConfig
 
 
-def _make_evo(tmp_path, tools: dict[str, str]):
-    """Helper: create evo tool files from {name: body} dict."""
-    tools_dir = tmp_path / "default" / "tools"
+def _make_bundle_workspace(tmp_path, tools: dict[str, str]):
+    """Helper: create bundle_workspace tool files from {name: body} dict.
+
+    Per ADR-0015: bundle_workspace/tools/ directly.
+    """
+    tools_dir = tmp_path / "tools"
     tools_dir.mkdir(parents=True, exist_ok=True)
     for name, body in tools.items():
         (tools_dir / f"{name}.py").write_text(textwrap.dedent(body))
 
 
 def test_unified_dispatches_to_correct_tool(tmp_path):
-    _make_evo(tmp_path, {
+    _make_bundle_workspace(tmp_path, {
         "ab": """\
             from palimpsest.runtime.tools import tool, ToolResult
 
@@ -36,7 +39,7 @@ def test_unified_dispatches_to_correct_tool(tmp_path):
         """,
     })
     config = ToolsConfig(disabled_builtins=["bash", "spawn"])
-    gw = UnifiedToolGateway(config, tmp_path, "default", ["a", "b"], MagicMock())
+    gw = UnifiedToolGateway(config, tmp_path, ["a", "b"], MagicMock())
 
     result = gw.execute("b", "call-1", {}, "/tmp")
     assert result.success
@@ -44,7 +47,7 @@ def test_unified_dispatches_to_correct_tool(tmp_path):
 
 
 def test_unified_schema_merges_all(tmp_path):
-    _make_evo(tmp_path, {
+    _make_bundle_workspace(tmp_path, {
         "ab": """\
             from palimpsest.runtime.tools import tool, ToolResult
 
@@ -60,7 +63,7 @@ def test_unified_schema_merges_all(tmp_path):
         """,
     })
     config = ToolsConfig(disabled_builtins=["bash", "spawn"])
-    gw = UnifiedToolGateway(config, tmp_path, "default", ["a", "b"], MagicMock())
+    gw = UnifiedToolGateway(config, tmp_path, ["a", "b"], MagicMock())
 
     names = [s["function"]["name"] for s in gw.schema()]
     assert "a" in names
@@ -68,7 +71,7 @@ def test_unified_schema_merges_all(tmp_path):
 
 
 def test_unified_unknown_tool(tmp_path):
-    _make_evo(tmp_path, {
+    _make_bundle_workspace(tmp_path, {
         "a": """\
             from palimpsest.runtime.tools import tool, ToolResult
 
@@ -79,7 +82,7 @@ def test_unified_unknown_tool(tmp_path):
         """,
     })
     config = ToolsConfig(disabled_builtins=["bash", "spawn"])
-    gw = UnifiedToolGateway(config, tmp_path, "default", ["a"], MagicMock())
+    gw = UnifiedToolGateway(config, tmp_path, ["a"], MagicMock())
     result = gw.execute("nonexistent", "x", {}, "/tmp")
     assert not result.success
 

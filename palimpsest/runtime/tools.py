@@ -64,7 +64,7 @@ def _function_to_schema(func: Callable) -> dict:
     required = []
 
     # Exclude injected runtime dependencies from schema
-    injected_args = {"workspace", "gateway", "evo_root", "evo_sha", "runtime_context"}
+    injected_args = {"workspace", "gateway", "evo_root", "evo_sha", "bundle_workspace", "bundle_sha", "runtime_context"}
 
     for name, param in sig.parameters.items():
         if name in injected_args:
@@ -334,12 +334,20 @@ def spawn(
     tasks: list,
     workspace: str,
     gateway: EventGateway,
-    evo_root: str,
+    evo_root: str = "",
     evo_sha: str = "",
+    bundle_workspace: str = "",  # ADR-0015: new parameter
+    bundle_sha: str = "",  # ADR-0015: new parameter
     wait_for: str = "all_complete",
     on_fail: str = "continue",
 ) -> ToolResult:
     """Request the Supervisor to spawn child tasks. Each child runs in an isolated git clone; the runtime auto-commits and pushes on success."""
+    # Backward compat: if bundle_workspace provided, use it
+    if not evo_root and bundle_workspace:
+        evo_root = bundle_workspace
+    if not evo_sha and bundle_sha:
+        evo_sha = bundle_sha
+    
     if not tasks:
         return ToolResult(success=False, output="No tasks provided to spawn")
 

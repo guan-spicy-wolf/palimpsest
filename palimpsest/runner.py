@@ -256,7 +256,7 @@ def _run_job_from_spec(
             **role_params,
         )
         context = build_context(
-            job_id, workspace, config.goal, context_spec, config, gateway, evo_root=evo_path,
+            job_id, workspace, config.goal, context_spec, config, gateway, bundle_workspace=Path(bundle_workspace),
         )
 
         # Stage 3: Interaction

@@ -1,7 +1,7 @@
 """Tests for observation_context context provider (ADR-0010).
 
 Tests the observation_context provider with mocked HTTP responses.
-Per Bundle MVP: context providers are loaded from evo/<bundle>/contexts/.
+Per ADR-0015: context providers are loaded from bundle_workspace/contexts/.
 """
 from __future__ import annotations
 
@@ -16,9 +16,12 @@ from palimpsest.runtime.contexts import resolve_context_functions
 
 
 @pytest.fixture
-def evo_with_observation_context(tmp_path):
-    """Create an evo directory with observation_context provider in a bundle."""
-    contexts_dir = tmp_path / "factorio" / "contexts"
+def bundle_workspace_with_observation_context(tmp_path):
+    """Create a bundle workspace with observation_context provider.
+
+    Per ADR-0015: bundle_workspace is bundle repo root, contexts in contexts/ directly.
+    """
+    contexts_dir = tmp_path / "contexts"
     contexts_dir.mkdir(parents=True)
     (contexts_dir / "observation.py").write_text(textwrap.dedent("""\
         from palimpsest.runtime.contexts import context_provider
@@ -71,24 +74,24 @@ def evo_with_observation_context(tmp_path):
     return tmp_path
 
 
-def get_observation_context_provider(bundle_workspace="factorio"):
+def get_observation_context_provider(bundle_workspace):
     """Load the observation_context provider from bundle contexts."""
-    providers = resolve_context_functions(bundle_workspace, ["observation_context"], bundle=bundle_workspace)
+    providers = resolve_context_functions(bundle_workspace, ["observation_context"])
     return providers.get("observation_context")
 
 
 class TestObservationContextProvider:
     """Test observation_context provider."""
 
-    def test_provider_loads_successfully(self, evo_with_observation_context):
+    def test_provider_loads_successfully(self, bundle_workspace_with_observation_context):
         """Provider is registered and loadable."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         assert observation_context is not None
         assert callable(observation_context)
 
-    def test_no_eventstore_url(self, evo_with_observation_context):
+    def test_no_eventstore_url(self, bundle_workspace_with_observation_context):
         """Returns empty string when no eventstore URL."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         job_config = JobConfig(
             bundle="factorio",
             eventstore=EventStoreConfig(url="", api_key_env=""),
@@ -96,9 +99,9 @@ class TestObservationContextProvider:
         result = observation_context(job_config=job_config)
         assert result == ""
 
-    def test_no_api_key(self, evo_with_observation_context, monkeypatch):
+    def test_no_api_key(self, bundle_workspace_with_observation_context, monkeypatch):
         """Returns empty string when no API key."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.delenv("EVENTSTORE_API_KEY", raising=False)
         job_config = JobConfig(
             bundle="factorio",
@@ -107,9 +110,9 @@ class TestObservationContextProvider:
         result = observation_context(job_config=job_config)
         assert result == ""
 
-    def test_successful_budget_variance_query(self, evo_with_observation_context, monkeypatch):
+    def test_successful_budget_variance_query(self, bundle_workspace_with_observation_context, monkeypatch):
         """Returns formatted metrics on successful API response."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         mock_response = Mock()
@@ -136,9 +139,9 @@ class TestObservationContextProvider:
         assert "planner" in result
         assert "variance" in result
 
-    def test_http_error_handling(self, evo_with_observation_context, monkeypatch):
+    def test_http_error_handling(self, bundle_workspace_with_observation_context, monkeypatch):
         """Returns error message on HTTP failure."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         with patch("httpx.get", side_effect=httpx.HTTPError("Connection failed")):
@@ -150,9 +153,9 @@ class TestObservationContextProvider:
         
         assert "Observation context unavailable" in result
 
-    def test_custom_window_hours(self, evo_with_observation_context, monkeypatch):
+    def test_custom_window_hours(self, bundle_workspace_with_observation_context, monkeypatch):
         """Passes window_hours parameter to API."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         captured_params = {}
@@ -173,9 +176,9 @@ class TestObservationContextProvider:
         
         assert captured_params.get("window_hours") == 48
 
-    def test_role_filter_passed_to_api(self, evo_with_observation_context, monkeypatch):
+    def test_role_filter_passed_to_api(self, bundle_workspace_with_observation_context, monkeypatch):
         """Passes role filter to API when specified."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         captured_params = {}
@@ -196,9 +199,9 @@ class TestObservationContextProvider:
         
         assert captured_params.get("role") == "worker"
 
-    def test_metric_type_displayed_in_context(self, evo_with_observation_context, monkeypatch):
+    def test_metric_type_displayed_in_context(self, bundle_workspace_with_observation_context, monkeypatch):
         """Metric type is shown in context header."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         mock_response = Mock()
@@ -214,9 +217,9 @@ class TestObservationContextProvider:
         
         assert "budget_variance" in result
 
-    def test_by_role_breakdown_included_when_no_role_filter(self, evo_with_observation_context, monkeypatch):
+    def test_by_role_breakdown_included_when_no_role_filter(self, bundle_workspace_with_observation_context, monkeypatch):
         """By-role breakdown is shown when no role filter."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         mock_response = Mock()
@@ -235,9 +238,9 @@ class TestObservationContextProvider:
         
         assert "Breakdown by Role" in result
 
-    def test_by_role_breakdown_skipped_when_role_filter(self, evo_with_observation_context, monkeypatch):
+    def test_by_role_breakdown_skipped_when_role_filter(self, bundle_workspace_with_observation_context, monkeypatch):
         """By-role breakdown is NOT shown when role filter is specified."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         mock_response = Mock()
@@ -256,9 +259,9 @@ class TestObservationContextProvider:
         
         assert "Breakdown by Role" not in result
 
-    def test_custom_description(self, evo_with_observation_context, monkeypatch):
+    def test_custom_description(self, bundle_workspace_with_observation_context, monkeypatch):
         """Custom description is included in output."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         mock_response = Mock()
@@ -274,9 +277,9 @@ class TestObservationContextProvider:
         
         assert "Custom metrics description" in result
 
-    def test_metric_type_budget_variance_queries_budget_variance(self, evo_with_observation_context, monkeypatch):
+    def test_metric_type_budget_variance_queries_budget_variance(self, bundle_workspace_with_observation_context, monkeypatch):
         """metric_type=budget_variance queries budget_variance endpoint."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         captured_url = {}
@@ -297,9 +300,9 @@ class TestObservationContextProvider:
         
         assert "budget_variance" in captured_url["url"]
 
-    def test_metric_type_preparation_failure_no_endpoint(self, evo_with_observation_context, monkeypatch):
+    def test_metric_type_preparation_failure_no_endpoint(self, bundle_workspace_with_observation_context, monkeypatch):
         """metric_type=preparation_failure returns warning (endpoint not implemented)."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         mock_response = Mock()
@@ -316,9 +319,9 @@ class TestObservationContextProvider:
         # The endpoint is queried but may return empty data
         assert "preparation_failure" in result or "items" not in result
 
-    def test_metric_type_tool_retry_no_endpoint(self, evo_with_observation_context, monkeypatch):
+    def test_metric_type_tool_retry_no_endpoint(self, bundle_workspace_with_observation_context, monkeypatch):
         """metric_type=tool_retry returns warning (endpoint not implemented)."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         mock_response = Mock()
@@ -335,9 +338,9 @@ class TestObservationContextProvider:
         # The endpoint is queried but may return empty data
         assert "tool_retry" in result or "items" not in result
 
-    def test_metric_type_none_defaults_to_budget_variance(self, evo_with_observation_context, monkeypatch):
+    def test_metric_type_none_defaults_to_budget_variance(self, bundle_workspace_with_observation_context, monkeypatch):
         """metric_type defaults to budget_variance."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         captured_url = {}
@@ -358,9 +361,9 @@ class TestObservationContextProvider:
         
         assert "budget_variance" in captured_url["url"]
 
-    def test_unknown_metric_type_shows_warning(self, evo_with_observation_context, monkeypatch):
+    def test_unknown_metric_type_shows_warning(self, bundle_workspace_with_observation_context, monkeypatch):
         """Unknown metric_type shows warning in output."""
-        observation_context = get_observation_context_provider(evo_with_observation_context)
+        observation_context = get_observation_context_provider(bundle_workspace_with_observation_context)
         monkeypatch.setenv("EVENTSTORE_API_KEY", "test-key")
         
         mock_response = Mock()
