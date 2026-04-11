@@ -163,6 +163,8 @@ def role(
     recommended_cost: float = 0.0,
     max_cost: float = 10.0,  # ADR-0004 D1a: per-job ceiling for spawn-time validation
     min_capability: str = "",
+    needs: list[str] | None = None,  # ADR-0016: capabilities required
+    contexts: list[str] | None = None,  # Context providers for LLM prompt
 ) -> Callable[[Callable[..., JobSpec]], Callable[..., JobSpec]]:
     """Decorator for role functions.
 
@@ -171,6 +173,9 @@ def role(
     
     Per Bundle MVP: 'teams' parameter is deprecated and ignored. Role membership
     is determined by bundle directory location: evo/<bundle>/roles/<name>.py
+    
+    Per ADR-0016: 'needs' lists capabilities required by this role.
+    Per architecture.md: 'contexts' lists context providers for LLM prompt.
     """
     def decorator(func: Callable[..., JobSpec]) -> Callable[..., JobSpec]:
         func.__role_metadata__ = RoleMetadata(
@@ -182,6 +187,8 @@ def role(
             recommended_cost=recommended_cost,
             max_cost=max_cost,  # ADR-0004 D1a
             min_capability=min_capability,
+            needs=needs or [],
+            contexts=contexts or [],
         )
         return func
 
