@@ -26,6 +26,7 @@ events (completed / failed) and orchestration-level events.
 
 from __future__ import annotations
 
+from dataclasses import asdict, is_dataclass
 import inspect
 import io
 import signal
@@ -79,6 +80,23 @@ class ControlledJobFailure(Exception):
         self.code = code
 
 
+def _normalize_tool_call_history(history: list[object]) -> list[dict]:
+    normalized: list[dict] = []
+    for item in history or []:
+        if isinstance(item, dict):
+            normalized.append(dict(item))
+            continue
+        if is_dataclass(item):
+            normalized.append(asdict(item))
+            continue
+        model_dump = getattr(item, "model_dump", None)
+        if callable(model_dump):
+            normalized.append(model_dump(mode="json"))
+            continue
+        normalized.append({"value": repr(item)})
+    return normalized
+
+
 def run_job(config: JobConfig) -> None:
     """Resolve the role into a JobSpec and execute the four-stage pipeline.
     
@@ -93,9 +111,16 @@ def run_job(config: JobConfig) -> None:
         bundle_workspace = config.bundle_source.workspace
     if config.target_source:
         target_workspace = config.target_source.workspace
-    
-    # Backward compat: if no bundle_source, use evo_sha to find evo
-    evo_path = Path(bundle_workspace) if bundle_workspace else Path(_EVO_DIR)
+
+    if not bundle_workspace:
+        bundle_name = config.bundle or "<missing>"
+        raise ControlledJobFailure(
+            f"Bundle workspace missing for bundle {bundle_name!r}. "
+            "Trenni must provide bundle_source.workspace.",
+            code="missing_bundle_workspace",
+        )
+
+    evo_path = Path(bundle_workspace)
     
     resolver = RoleManager(evo_path)
     spec = resolver.resolve(config.role, **dict(config.role_params or {}))
@@ -326,7 +351,7 @@ def _run_job_from_spec(
                     cost_tracking_degraded=cost_tracking_degraded,
                     cost=llm.total_cost,
                     artifact_bindings=result.get("artifact_bindings", []),
-                    tool_call_history=result.get("tool_call_history", []),
+                    tool_call_history=_normalize_tool_call_history(result.get("tool_call_history", [])),
                 )
             )
             logger.info(f"Job {job_id} completed")

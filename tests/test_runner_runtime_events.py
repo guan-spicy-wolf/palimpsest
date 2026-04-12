@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from unittest.mock import MagicMock, patch, call
 
@@ -27,6 +28,7 @@ from palimpsest.events import (
 )
 
 from palimpsest.runtime.roles import JobSpec
+from palimpsest.runtime.tool_pattern import ToolCallRecord
 
 from palimpsest.stages.publication import PublicationGuardrailViolation
 
@@ -113,6 +115,19 @@ def _spec(publication_fn=None) -> JobSpec:
         tools=[],
 
     )
+
+
+
+def test_run_job_requires_bundle_source_workspace():
+    config = JobConfig(job_id="job-1", goal="x", role="optimizer", bundle="factorio")
+
+    with patch("palimpsest.runner.RoleManager") as role_manager, \
+         patch("palimpsest.runner._run_job_from_spec") as run_from_spec:
+        with pytest.raises(ControlledJobFailure, match="Bundle workspace missing"):
+            run_job(config)
+
+    role_manager.assert_not_called()
+    run_from_spec.assert_not_called()
 
 
 
@@ -425,6 +440,48 @@ def test_runner_propagates_cost_tracking_degraded_flag(tmp_path):
     completed = [event for event in emitter.events if isinstance(event, JobCompletedData)]
 
     assert completed[-1].cost_tracking_degraded is True
+
+
+def test_runner_serializes_tool_call_history_dataclasses(tmp_path):
+
+    emitter = RecordingEmitter()
+
+    config = JobConfig(job_id="job-1", task="x")
+
+    spec = _spec()
+
+    patches = _base_patches(emitter, tmp_path)
+
+    patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
+
+        return_value={
+            "status": "complete",
+            "summary": "ok",
+            "messages": [],
+            "tool_call_history": [
+                ToolCallRecord(name="bash", args_json='{"command": "ls"}'),
+            ],
+        }
+
+    )
+
+    patches["palimpsest.runner.git.Repo"] = MagicMock()
+
+
+
+    with _apply_patches(patches)[0]:
+
+        _run_job_from_spec(config, spec, tmp_path, bundle_workspace="", target_workspace="")
+
+
+
+    completed = [event for event in emitter.events if isinstance(event, JobCompletedData)]
+
+    assert completed
+
+    assert completed[-1].tool_call_history == [
+        {"name": "bash", "args_json": '{"command": "ls"}'},
+    ]
 
 
 
