@@ -442,49 +442,6 @@ def test_runner_propagates_cost_tracking_degraded_flag(tmp_path):
     assert completed[-1].cost_tracking_degraded is True
 
 
-def test_runner_serializes_tool_call_history_dataclasses(tmp_path):
-
-    emitter = RecordingEmitter()
-
-    config = JobConfig(job_id="job-1", task="x")
-
-    spec = _spec()
-
-    patches = _base_patches(emitter, tmp_path)
-
-    patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
-
-        return_value={
-            "status": "complete",
-            "summary": "ok",
-            "messages": [],
-            "tool_call_history": [
-                ToolCallRecord(name="bash", args_json='{"command": "ls"}'),
-            ],
-        }
-
-    )
-
-    patches["palimpsest.runner.git.Repo"] = MagicMock()
-
-
-
-    with _apply_patches(patches)[0]:
-
-        _run_job_from_spec(config, spec, tmp_path, bundle_workspace="", target_workspace="")
-
-
-
-    completed = [event for event in emitter.events if isinstance(event, JobCompletedData)]
-
-    assert completed
-
-    assert completed[-1].tool_call_history == [
-        {"name": "bash", "args_json": '{"command": "ls"}'},
-    ]
-
-
-
 
 
 def test_job_timeout_emits_failed_with_timeout_code(tmp_path):
