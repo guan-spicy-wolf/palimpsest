@@ -80,23 +80,6 @@ class ControlledJobFailure(Exception):
         self.code = code
 
 
-def _normalize_tool_call_history(history: list[object]) -> list[dict]:
-    normalized: list[dict] = []
-    for item in history or []:
-        if isinstance(item, dict):
-            normalized.append(dict(item))
-            continue
-        if is_dataclass(item):
-            normalized.append(asdict(item))
-            continue
-        model_dump = getattr(item, "model_dump", None)
-        if callable(model_dump):
-            normalized.append(model_dump(mode="json"))
-            continue
-        normalized.append({"value": repr(item)})
-    return normalized
-
-
 def run_job(config: JobConfig) -> None:
     """Resolve the role into a JobSpec and execute the four-stage pipeline.
     
@@ -351,7 +334,6 @@ def _run_job_from_spec(
                     cost_tracking_degraded=cost_tracking_degraded,
                     cost=llm.total_cost,
                     artifact_bindings=result.get("artifact_bindings", []),
-                    tool_call_history=_normalize_tool_call_history(result.get("tool_call_history", [])),
                 )
             )
             logger.info(f"Job {job_id} completed")
