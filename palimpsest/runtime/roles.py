@@ -17,7 +17,10 @@ class JobSpec:
     """Job specification from role definition.
     
     Per ADR-0009: preparation_fn is the canonical name for workspace setup.
+    Per ADR-0016: needs lists capabilities; capability path replaces preparation_fn/publication_fn.
     workspace_fn is accepted as an alternative for backward compatibility.
+    
+    Validation is deferred to RoleManager.resolve() to allow needs propagation.
     """
     preparation_fn: Callable[..., Any] | None = None  # ADR-0009: canonical name
     context_fn: Callable[..., dict] | None = None
@@ -25,18 +28,17 @@ class JobSpec:
     tools: list[str] = field(default_factory=list)
     source_role: str = ""
     workspace_fn: Callable[..., Any] | None = None  # Backward compatibility
+    needs: list[str] = field(default_factory=list)  # ADR-0016: capabilities required
     
     def __post_init__(self):
         # Handle backward compatibility: if workspace_fn is provided but not preparation_fn,
         # use workspace_fn as preparation_fn
         if self.preparation_fn is None and self.workspace_fn is not None:
             self.preparation_fn = self.workspace_fn
-        if self.preparation_fn is None:
-            raise ValueError("JobSpec requires preparation_fn (or workspace_fn for backward compat)")
+        # Validation deferred to RoleManager.resolve() for needs propagation
+        # context_fn is always required
         if self.context_fn is None:
             raise ValueError("JobSpec requires context_fn")
-        if self.publication_fn is None:
-            raise ValueError("JobSpec requires publication_fn")
 
 
 def workspace_config(
@@ -216,8 +218,17 @@ class RoleManager(RoleMetadataReader):
         """Load and execute role module to produce JobSpec.
 
         Per Bundle MVP: Loads from evo/<bundle>/roles/<name>.py only.
+        Per ADR-0016: Propagates needs from RoleMetadata to JobSpec.
         """
         func = self._load_role_function(role_name)
+        # ADR-0016: Extract needs from role metadata
+        metadata = getattr(func, "__role_metadata__", None)
+        metadata_needs = list(metadata.needs) if metadata and hasattr(metadata, "needs") else []
+        
+        # Inject needs into params for roles that accept it
+        if metadata_needs:
+            params.setdefault("needs", metadata_needs)
+        
         try:
             spec = func(**params)
         except TypeError as exc:
@@ -225,6 +236,20 @@ class RoleManager(RoleMetadataReader):
         if not isinstance(spec, JobSpec):
             raise TypeError(f"Role '{role_name}' returned {type(spec).__name__}, expected JobSpec")
         spec.source_role = role_name
+        
+        # ADR-0016: Ensure needs from metadata is set on JobSpec
+        # (role functions may not pass needs parameter to JobSpec constructor)
+        if metadata_needs and not spec.needs:
+            spec.needs = metadata_needs
+        
+        # Re-validate after needs propagation
+        uses_capabilities = bool(spec.needs)
+        if not uses_capabilities:
+            if spec.preparation_fn is None and spec.workspace_fn is None:
+                raise ValueError(f"Role '{role_name}' needs preparation_fn when needs=[]")
+            if spec.publication_fn is None:
+                raise ValueError(f"Role '{role_name}' needs publication_fn when needs=[]")
+        
         return spec
 
     def get_definition(self, name: str) -> RoleMetadata | None:

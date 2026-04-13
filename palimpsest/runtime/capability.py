@@ -45,28 +45,13 @@ class Capability(Protocol):
 @dataclass
 class JobContext:
     """Context passed to capability setup/finalize.
-    
+
     Provides access to:
     - Job configuration
     - Workspaces (bundle and target)
     - Resources dict for capability-shared state
     - analyzer_version for observation emission (ADR-0017)
     - target_source for artifact URI construction (ADR-0015)
-    - role_type for capability behavior differentiation (ADR-0016)
-    
-    ## Hallucination Gate Contract (role_type)
-    
-    The `role_type` field determines hallucination gate behavior in git_workspace:
-    - "worker": No changes = failure (hallucination, expected to produce output)
-    - "planner"/"evaluator": No changes = success (no modifications expected)
-    
-    This field is populated from RoleMetadata.role_type, which defaults to "worker".
-    The role_type is set by the @role decorator's role_type parameter:
-    
-        @role(name="planner", role_type="planner", ...)
-        def planner_role(...): ...
-    
-    If role_meta is unavailable (e.g., role not found), defaults to "worker".
     """
     job_id: str
     task_id: str
@@ -78,7 +63,6 @@ class JobContext:
     resources: dict[str, Any] = field(default_factory=dict)
     analyzer_version: AnalyzerVersion | None = None  # ADR-0017
     target_source: TargetSource | None = None  # For artifact URI construction
-    role_type: str = "worker"  # For hallucination gate behavior (worker vs planner/evaluator)
 
 
 # === Built-in Capabilities ===
@@ -136,26 +120,28 @@ class GitWorkspaceCapability:
         )
         
         if result.returncode == 0:
-            # No changes - Hallucination Gate
-            # Per ADR-0015 §2.5: Worker role should produce output; no output = hallucination.
-            # Planner/evaluator roles may not produce output (read-only analysis).
-            # The role_type field is populated from RoleMetadata.role_type (see JobContext docstring).
-            is_worker = ctx.role_type == "worker"
-            logger.info(
-                f"Hallucination gate: no changes detected, role_type={ctx.role_type}, "
-                f"treating as {'failure (hallucination)' if is_worker else 'success (expected)'}"
-            )
+            # No changes — publication skipped.
+            # Per ADR-0015 §2.5: capability only detects "did agent change files".
+            # Whether no-changes is acceptable is evaluator's judgment (§2.5 layer 3).
+            logger.info("No changes detected, publication skipped")
             events.append(EventData(type="publication.skipped", data={
                 "reason": "no_changes",
                 "workspace": str(workspace),
-                "role_type": ctx.role_type,
-                "is_hallucination": is_worker,
             }))
-            # Worker without changes = hallucination = failure
-            # Non-worker (planner/evaluator) without changes = expected = success
-            return FinalizeResult(events=events, success=not is_worker)
+            return FinalizeResult(events=events, success=True)
         
-        # Commit
+        # Commit - first configure git identity
+        subprocess.run(
+            ["git", "config", "user.email", "yoitsu@example.com"],
+            cwd=workspace,
+            check=False,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Yoitsu Bot"],
+            cwd=workspace,
+            check=False,
+        )
+        
         sha_before = subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
             cwd=workspace
@@ -211,7 +197,7 @@ class GitWorkspaceCapability:
                     }))
                     return FinalizeResult(events=events, success=False)
                 
-                artifact_ref = f"{ctx.target_source.repo_uri}@{sha_after}"
+                artifact_ref = f"git+{ctx.target_source.repo_uri}@{sha_after}"
                 events.append(EventData(type="artifact.published", data={
                     "ref": artifact_ref,
                     "relation": "workspace_output",

@@ -174,7 +174,6 @@ def _run_job_from_spec(
     )
 
     # Create JobContext for capabilities (ADR-0016)
-    role_type = role_meta.role_type if role_meta else "worker"
     cap_ctx = JobContext(
         job_id=job_id,
         task_id=task_id,
@@ -186,7 +185,6 @@ def _run_job_from_spec(
         resources={},  # Populated by capabilities
         analyzer_version=config.analyzer_version,  # ADR-0017
         target_source=config.target_source,  # For artifact URI
-        role_type=role_type,  # For hallucination gate behavior
     )
 
     workspace: str | None = None
@@ -205,7 +203,7 @@ def _run_job_from_spec(
                     try:
                         events = cap.setup(cap_ctx)
                         for evt in events:
-                            gateway.emit(evt)
+                            gateway.emit_data(evt)
                     except Exception as e:
                         logger.error(f"Capability {cap_name} setup failed: {e}")
                         gateway.emit(
@@ -300,7 +298,7 @@ def _run_job_from_spec(
                     try:
                         finalize_result = cap.finalize(cap_ctx)
                         for evt in finalize_result.events:
-                            gateway.emit(evt)
+                            gateway.emit_data(evt)
                         if not finalize_result.success:
                             all_success = False
                             logger.warning(f"Capability {cap_name} finalize returned success=False")
