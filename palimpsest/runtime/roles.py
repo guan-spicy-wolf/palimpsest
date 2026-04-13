@@ -225,8 +225,8 @@ class RoleManager(RoleMetadataReader):
     - Missing role is a hard error
     """
 
-    def __init__(self, bundle_root: str | Path) -> None:
-        super().__init__(bundle_root)
+    def __init__(self, bundle_root: str | Path, bundle: str = "") -> None:
+        super().__init__(bundle_root, bundle=bundle)
         self._roles_dir = self._root / "roles"
 
     def resolve(self, role_name: str, **params: Any) -> JobSpec:

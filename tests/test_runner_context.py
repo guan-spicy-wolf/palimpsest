@@ -232,9 +232,11 @@ def test_runner_passes_runtime_context_to_publication_fn(tmp_path):
     assert ctx.workspace_path == str(tmp_path)
 
 
-@pytest.mark.xfail(reason="ADR-0018: Legacy cleanup path removed for non-blocked roles. Blocked roles use separate path. Pending ADR-0019 deletion.")
 def test_runner_calls_cleanup_on_success(tmp_path):
-    """Runner calls RuntimeContext.cleanup() in finally block on success."""
+    """Runner calls RuntimeContext.cleanup() in finally block on success.
+    
+    Per ADR-0018: cleanup is called for both ephemeral and Trenni-provided workspaces.
+    """
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-cleanup-ok", task="test cleanup")
     spec = _spec()
@@ -259,9 +261,11 @@ def test_runner_calls_cleanup_on_success(tmp_path):
     assert len(cleanup_called) == 1
 
 
-@pytest.mark.xfail(reason="ADR-0018: Legacy cleanup path removed for non-blocked roles. Blocked roles use separate path. Pending ADR-0019 deletion.")
 def test_runner_calls_cleanup_on_failure(tmp_path):
-    """Runner calls RuntimeContext.cleanup() in finally block on failure."""
+    """Runner calls RuntimeContext.cleanup() in finally block on failure.
+    
+    Per ADR-0018: cleanup is called even on failure (finally block).
+    """
     emitter = RecordingEmitter()
     config = JobConfig(job_id="job-cleanup-fail", task="test cleanup on fail")
     spec = _spec()

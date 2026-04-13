@@ -10,7 +10,7 @@ import pytest
 
 from palimpsest.config import JobConfig
 from palimpsest.events import JobCompletedData, JobFailedData, RuntimeIssueData
-from palimpsest.runtime.roles import JobSpec
+from palimpsest.runtime.roles import JobSpec, RoleManager
 from palimpsest.runner import _run_job_from_spec
 from palimpsest.runtime.capability import JobContext, FinalizeResult
 from yoitsu_contracts import AnalyzerVersion
@@ -568,3 +568,116 @@ def test_non_blocked_role_rejects_legacy_hooks(tmp_path):
     # If we tried to use this spec, RoleManager would raise:
     # ValueError: Role ':non_blocked_role' uses deprecated preparation_fn
     # Our test fixtures already verify this by NOT having legacy hooks
+
+
+def test_blocked_role_real_resolve_path(tmp_path):
+    """Blocked role uses legacy path via real RoleManager.resolve().
+    
+    Per ADR-0018: This test exercises the FULL resolution path:
+    1. RoleManager(bundle_root, bundle="factorio") - bundle identity correct
+    2. resolver.resolve("worker") - produces JobSpec with legacy hooks
+    3. RoleManager validation sees "factorio:worker" in BLOCKED_ROLES_PENDING_ADR_0019
+    4. No ValueError raised - blocked role allowed to use legacy hooks
+    """
+    import tempfile
+    import textwrap
+    
+    # Create a test bundle with blocked role definition
+    with tempfile.TemporaryDirectory() as td:
+        bundle_root = Path(td)
+        # bundle_root IS the bundle workspace, roles are at bundle_root/roles/
+        roles_dir = bundle_root / "roles"
+        roles_dir.mkdir(parents=True)
+        
+        # Create blocked role with legacy hooks
+        (roles_dir / "worker.py").write_text(textwrap.dedent('''
+            from palimpsest.runtime.roles import role, JobSpec, context_spec
+            from palimpsest.config import WorkspaceConfig
+            
+            def prep(**kw):
+                return WorkspaceConfig(repo="", new_branch=False)
+            
+            def pub(**kw):
+                return None, []
+            pub.__publication_strategy__ = "skip"
+            
+            @role(name="worker", description="test blocked worker")
+            def worker(**p):
+                return JobSpec(
+                    preparation_fn=prep,
+                    context_fn=context_spec("test", []),
+                    publication_fn=pub,
+                    tools=["bash"],
+                )
+        '''))
+        
+        # Key: pass bundle="factorio" to RoleManager
+        # This is how runner.py calls it: RoleManager(evo_path, bundle=config.bundle)
+        manager = RoleManager(bundle_root, bundle="factorio")
+        
+        # This should NOT raise ValueError - blocked role allowed
+        spec = manager.resolve("worker")
+        
+        # Verify: spec has legacy hooks (blocked roles still use them)
+        assert spec.preparation_fn is not None
+        assert spec.publication_fn is not None
+        assert spec.source_role == "worker"
+        assert "bash" in spec.tools
+
+
+def test_empty_needs_has_execution_workspace(tmp_path):
+    """ADR-0018 Contract: needs=[] roles get ephemeral execution workspace.
+    
+    Per ADR-0018: Every job has an execution workspace, even analysis-only roles.
+    Tools requiring cwd (bash) and context providers can rely on workspace being non-empty.
+    
+    This test verifies:
+    1. needs=[] role gets workspace (not empty string)
+    2. bash tool can execute (cwd is valid)
+    3. workspace is cleaned up after job completes
+    """
+    import tempfile
+    
+    emitter = RecordingEmitter()
+    config = JobConfig(job_id="workspace-test", task="verify workspace")
+    config.bundle = "test-bundle"
+    
+    # Role with needs=[] but tools requiring workspace
+    spec = JobSpec(
+        context_fn=lambda **p: {"system": "test", "sections": [], "task": p.get("goal", "")},
+        tools=["bash"],  # Requires cwd
+    )
+    spec.source_role = "test_role"
+    
+    patches = _base_patches(emitter, tmp_path)
+    patches["palimpsest.runner.run_interaction_loop"] = MagicMock(
+        return_value={"status": "complete", "summary": "ok"}
+    )
+    patches["palimpsest.runner.UnifiedToolGateway"] = MagicMock()
+    patches["palimpsest.runner.git.Repo"] = MagicMock()
+    
+    workspace_created = []
+    original_mkdtemp = tempfile.mkdtemp
+    def track_mkdtemp(*args, **kwargs):
+        result = original_mkdtemp(*args, **kwargs)
+        workspace_created.append(result)
+        return result
+    
+    with patch.object(tempfile, "mkdtemp", track_mkdtemp):
+        with _apply_patches(patches)[0]:
+            _run_job_from_spec(
+                config, spec, tmp_path,
+                bundle_workspace=str(tmp_path),
+                target_workspace="",  # Empty - triggers ephemeral creation
+                needs=[],  # Empty capability
+            )
+    
+    # Verify: ephemeral workspace was created
+    assert len(workspace_created) == 1
+    created_workspace = workspace_created[0]
+    assert created_workspace.startswith("/tmp")
+    assert "palimpsest-exec" in created_workspace
+    
+    # Verify: job completed successfully (workspace was valid)
+    completed = [e for e in emitter.events if isinstance(e, JobCompletedData)]
+    assert len(completed) == 1

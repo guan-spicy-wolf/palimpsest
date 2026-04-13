@@ -105,8 +105,9 @@ def run_job(config: JobConfig) -> None:
         )
 
     evo_path = Path(bundle_workspace)
+    bundle_name = config.bundle or ""
     
-    resolver = RoleManager(evo_path)
+    resolver = RoleManager(evo_path, bundle=bundle_name)
     spec = resolver.resolve(config.role, **dict(config.role_params or {}))
 
     logger.info(
@@ -240,8 +241,21 @@ def _run_job_from_spec(
                         code="capability_setup",
                     )
         
-        # Workspace comes from Trenni (ADR-0015)
-        workspace = target_workspace
+        # ADR-0018 Contract: Every job has an execution workspace.
+        # - For needs=['git_workspace']: workspace = target_workspace (Trenni prepared)
+        # - For needs=[]: workspace = ephemeral execution directory
+        # - Tools that require cwd (bash) and context providers can rely on workspace being non-empty
+        
+        if target_workspace:
+            # Repo-authoring role: Trenni prepared workspace with git clone
+            workspace = target_workspace
+            _ephemeral_workspace = False
+        else:
+            # Analysis-only role: create ephemeral execution workspace
+            import tempfile
+            workspace = tempfile.mkdtemp(prefix="palimpsest-exec-")
+            _ephemeral_workspace = True
+            logger.info(f"Created execution workspace for analysis role: {workspace}")
         
         # ADR-0011: set workspace_path after workspace setup
         runtime_context.workspace_path = workspace
@@ -353,8 +367,15 @@ def _run_job_from_spec(
     finally:
         if 'runtime_context' in locals():
             runtime_context.cleanup()
-        # ADR-0018: Cleanup is handled by CleanupCapability, not legacy finalize
-        # Workspace cleanup is ephemeral per ADR-0015, handled by Trenni
+        # ADR-0018 Contract: cleanup ephemeral execution workspace if we created it
+        # (Trenni-provided target_workspace is managed by Trenni, not us)
+        if '_ephemeral_workspace' in locals() and _ephemeral_workspace and workspace:
+            import shutil
+            try:
+                shutil.rmtree(workspace)
+                logger.info(f"Cleaned up ephemeral workspace: {workspace}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup ephemeral workspace {workspace}: {e}")
         gateway.close()
 
 
