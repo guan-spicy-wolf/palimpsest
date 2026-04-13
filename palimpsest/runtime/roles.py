@@ -12,6 +12,21 @@ from palimpsest.config import PublicationConfig, WorkspaceConfig
 from yoitsu_contracts.role_metadata import RoleMetadata, RoleMetadataReader
 
 
+# ADR-0018 Phase 3: Blocked roles pending ADR-0019 authority split
+# These roles are allowed to use legacy lifecycle hooks until ADR-0019 is resolved
+#
+# Format: "bundle:role" where bundle is the evo/<bundle> directory name
+# and role is the @role(name=...) value.
+#
+# Example: "factorio:worker" means evo/factorio/roles/worker.py with @role(name="worker")
+#
+BLOCKED_ROLES_PENDING_ADR_0019 = {
+    "factorio:worker",
+    "factorio:implementer",
+    "factorio:evaluator",
+}
+
+
 @dataclass
 class JobSpec:
     """Job specification from role definition.
@@ -242,13 +257,35 @@ class RoleManager(RoleMetadataReader):
         if metadata_needs and not spec.needs:
             spec.needs = metadata_needs
         
-        # Re-validate after needs propagation
-        uses_capabilities = bool(spec.needs)
-        if not uses_capabilities:
-            if spec.preparation_fn is None and spec.workspace_fn is None:
-                raise ValueError(f"Role '{role_name}' needs preparation_fn when needs=[]")
-            if spec.publication_fn is None:
-                raise ValueError(f"Role '{role_name}' needs publication_fn when needs=[]")
+        # ADR-0018 Phase 3: Validate role lifecycle contract
+        # Blocked roles (pending ADR-0019) are allowed to use legacy hooks
+        # All other roles must use capability-only model
+        bundle_name = self._bundle or ""
+        role_key = f"{bundle_name}:{role_name}"
+        is_blocked = role_key in BLOCKED_ROLES_PENDING_ADR_0019
+        
+        if is_blocked:
+            # Blocked role: allow legacy hooks, but warn
+            if not spec.needs and (spec.preparation_fn or spec.publication_fn):
+                logger.warning(
+                    f"Role '{role_key}' uses legacy lifecycle hooks. "
+                    f"Blocked pending ADR-0019 authority split. "
+                    f"See docs/role-migration-checklist.md"
+                )
+        else:
+            # Non-blocked role: enforce capability-only model
+            if spec.preparation_fn is not None:
+                raise ValueError(
+                    f"Role '{role_key}' uses deprecated preparation_fn. "
+                    f"Per ADR-0018, roles must use capability-only model. "
+                    f"Use needs=[] for analysis-only roles or needs=['git_workspace'] for repo roles."
+                )
+            if spec.publication_fn is not None:
+                raise ValueError(
+                    f"Role '{role_key}' uses deprecated publication_fn. "
+                    f"Per ADR-0018, roles must use capability-only model. "
+                    f"Publication is handled by git_workspace capability."
+                )
         
         return spec
 

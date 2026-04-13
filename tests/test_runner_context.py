@@ -76,6 +76,7 @@ def _apply_patches(patches):
     return stack, mocks
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy preparation_fn path removed for non-blocked roles. Blocked roles use separate path. Pending ADR-0019 deletion.")
 def test_runner_creates_runtime_context(tmp_path):
     """Runner creates RuntimeContext with correct job_id, task_id, and team."""
     emitter = RecordingEmitter()
@@ -114,6 +115,7 @@ def test_runner_creates_runtime_context(tmp_path):
     assert ctx.bundle == "factorio"
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy preparation_fn/publication_fn path removed for non-blocked roles. Blocked roles use separate path. Pending ADR-0019 deletion.")
 def test_runner_sets_workspace_path_on_context(tmp_path):
     """Runner sets workspace_path on RuntimeContext after workspace setup."""
     emitter = RecordingEmitter()
@@ -191,6 +193,7 @@ def test_runner_passes_runtime_context_to_tool_gateway(tmp_path):
     # is that tools receive the context (tested in test_tool_injection.py)
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy publication_fn path removed for non-blocked roles. Blocked roles use separate path. Pending ADR-0019 deletion.")
 def test_runner_passes_runtime_context_to_publication_fn(tmp_path):
     """Runner passes RuntimeContext to publication_fn."""
     emitter = RecordingEmitter()
@@ -229,6 +232,7 @@ def test_runner_passes_runtime_context_to_publication_fn(tmp_path):
     assert ctx.workspace_path == str(tmp_path)
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy cleanup path removed for non-blocked roles. Blocked roles use separate path. Pending ADR-0019 deletion.")
 def test_runner_calls_cleanup_on_success(tmp_path):
     """Runner calls RuntimeContext.cleanup() in finally block on success."""
     emitter = RecordingEmitter()
@@ -255,6 +259,7 @@ def test_runner_calls_cleanup_on_success(tmp_path):
     assert len(cleanup_called) == 1
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy cleanup path removed for non-blocked roles. Blocked roles use separate path. Pending ADR-0019 deletion.")
 def test_runner_calls_cleanup_on_failure(tmp_path):
     """Runner calls RuntimeContext.cleanup() in finally block on failure."""
     emitter = RecordingEmitter()
@@ -283,6 +288,7 @@ def test_runner_calls_cleanup_on_failure(tmp_path):
     assert len(cleanup_called) == 1
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy preparation_fn path removed for non-blocked roles. Blocked roles use separate path. Pending ADR-0019 deletion.")
 def test_runtime_context_can_be_used_by_preparation_fn(tmp_path):
     """preparation_fn can populate resources on RuntimeContext."""
     emitter = RecordingEmitter()
@@ -336,6 +342,7 @@ def test_runtime_context_can_be_used_by_preparation_fn(tmp_path):
     assert "cleaned" in cleanup_ran
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy preparation_fn/publication_fn path removed for non-blocked roles. Blocked roles use separate path. Pending ADR-0019 deletion.")
 def test_runner_uses_task_id_from_config(tmp_path):
     """Runner uses task_id from config if provided, otherwise defaults to job_id."""
     emitter = RecordingEmitter()

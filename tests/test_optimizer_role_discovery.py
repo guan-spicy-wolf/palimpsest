@@ -146,19 +146,17 @@ def test_role_metadata_reader_vs_role_manager():
         roles_dir.mkdir(parents=True)
         (roles_dir / "test_role.py").write_text(textwrap.dedent("""\
             from palimpsest.runtime.roles import JobSpec, role, context_spec
-            from palimpsest.config import WorkspaceConfig
             
             @role(
                 name="test_role",
                 description="Test role for discovery",
                 min_cost=0.1,
                 max_cost=1.0,
+                needs=[],  # ADR-0018: capability-only
             )
             def test_role(**params) -> JobSpec:
                 return JobSpec(
-                    preparation_fn=lambda **_: WorkspaceConfig(repo="", new_branch=False),
-                    context_fn=lambda **_: {},
-                    publication_fn=lambda **_: (None, []),
+                    context_fn=context_spec("test system", []),
                     tools=["bash"],
                 )
         """))

@@ -56,6 +56,7 @@ from palimpsest.runtime import (
     UnifiedToolGateway,
 )
 from palimpsest.runtime.capability import JobContext, get_capability, BUILTIN_CAPABILITIES
+from palimpsest.runtime.roles import BLOCKED_ROLES_PENDING_ADR_0019
 from yoitsu_contracts import AnalyzerVersion, RoleMetadata
 from palimpsest.runtime.roles import JobSpec
 from palimpsest.stages import (
@@ -140,14 +141,17 @@ def _run_job_from_spec(
     needs: list[str] = [],
     role_meta: RoleMetadata | None = None,
 ) -> None:
-    """Execute the four-stage pipeline with capability model (ADR-0016).
+    """Execute the four-stage pipeline with capability model (ADR-0018).
+    
+    Per ADR-0018: capability is the ONLY lifecycle model.
+    - All jobs follow: setup -> context -> interaction -> finalize
+    - needs=[] means "no extra capability needs", NOT legacy fallback
+    - Empty capability set is a valid, first-class execution path
     
     Per ADR-0016: capability provides setup/finalize lifecycle.
     - setup() returns events, runtime emits
     - finalize() returns FinalizeResult(events, success)
     - success=False → job.failed
-    
-    Backward compat: if needs=[], use old preparation/publication fn.
     """
     job_id = config.job_id
     if not job_id:
@@ -195,63 +199,54 @@ def _run_job_from_spec(
     try:
         role_params = dict(config.role_params or {})
         
-        # ADR-0016: Stage 1 - Capability setup
-        if needs:
-            for cap_name in needs:
-                cap = get_capability(cap_name)
-                if cap:
-                    try:
-                        events = cap.setup(cap_ctx)
-                        for evt in events:
-                            gateway.emit_data(evt)
-                    except Exception as e:
-                        logger.error(f"Capability {cap_name} setup failed: {e}")
-                        gateway.emit(
-                            RuntimeIssueData(
-                                stage="setup",
-                                fatal=True,
-                                code=f"{cap_name}_setup_failed",
-                                error=str(e),
-                            )
-                        )
-                        raise ControlledJobFailure(
-                            f"Capability {cap_name} setup failed: {e}",
-                            code="capability_setup",
-                        )
-            workspace = target_workspace  # Use Trenni-prepared workspace
-        else:
-            # Backward compat: use old preparation_fn
-            branch_prefix = str(
-                role_params.get("branch_prefix")
-                or getattr(spec.publication_fn, "__publication_branch_prefix__", config.publication.branch_prefix)
-            )
-            prep_params = {
-                "goal": config.goal,
-                "repo": config.workspace.repo,
-                "init_branch": config.workspace.init_branch,
-                **role_params,
-            }
-            prep_sig = inspect.signature(spec.preparation_fn)
-            if "runtime_context" in prep_sig.parameters:
-                prep_params["runtime_context"] = runtime_context
-            if "evo_root" in prep_sig.parameters:
-                prep_params["evo_root"] = str(evo_path)
-            workspace_cfg = spec.preparation_fn(**prep_params)
-            workspace = setup_workspace(
-                job_id,
-                workspace_cfg,
-                branch_prefix,
-                task_id=config.task_id or job_id,
-                goal=config.goal,
-                gateway=gateway,
+        # ADR-0018 Phase 3: Check if role is blocked pending ADR-0019
+        # Blocked roles use legacy path, others use unified lifecycle
+        role_key = f"{config.bundle}:{config.role}"
+        is_blocked = role_key in BLOCKED_ROLES_PENDING_ADR_0019
+        
+        if is_blocked:
+            # Blocked role: use legacy path (temporary until ADR-0019)
+            return _run_blocked_role_legacy_path(
+                config, spec, evo_path, gateway, runtime_context, cap_ctx,
+                bundle_workspace=bundle_workspace,
+                target_workspace=target_workspace,
+                role_params=role_params,
+                llm=llm,
                 cost_tracking_degraded=cost_tracking_degraded,
             )
-            cap_ctx.target_workspace = workspace
-
+        
+        # Non-blocked role: unified lifecycle (ADR-0018)
+        # ADR-0018: Stage 1 - Capability setup (unified for all jobs)
+        # Empty needs means no capability setup, but still unified lifecycle
+        for cap_name in needs:
+            cap = get_capability(cap_name)
+            if cap:
+                try:
+                    events = cap.setup(cap_ctx)
+                    for evt in events:
+                        gateway.emit_data(evt)
+                except Exception as e:
+                    logger.error(f"Capability {cap_name} setup failed: {e}")
+                    gateway.emit(
+                        RuntimeIssueData(
+                            stage="setup",
+                            fatal=True,
+                            code=f"{cap_name}_setup_failed",
+                            error=str(e),
+                        )
+                    )
+                    raise ControlledJobFailure(
+                        f"Capability {cap_name} setup failed: {e}",
+                        code="capability_setup",
+                    )
+        
+        # Workspace comes from Trenni (ADR-0015)
+        workspace = target_workspace
+        
         # ADR-0011: set workspace_path after workspace setup
         runtime_context.workspace_path = workspace
 
-        # Capture base SHA before agent modifications
+        # Capture base SHA before agent modifications (if workspace has git)
         try:
             base_sha = git.Repo(workspace).head.commit.hexsha
         except Exception:
@@ -270,55 +265,43 @@ def _run_job_from_spec(
             job_id, workspace, config.goal, context_spec, config, gateway, bundle_workspace=Path(bundle_workspace),
         )
 
-        # Stage 3: Interaction
+        # Stage 3: Interaction (ADR-0018: unified for all jobs)
         bundle_sha = config.bundle_source.resolved_ref if config.bundle_source else ""
         tools = _setup_tools(config, spec, Path(bundle_workspace), bundle_sha, gateway)
         
-        if needs:
-            # ADR-0016: capability path - no publication_fn, interaction only
-            result = run_interaction_loop(
-                job_id, context, workspace, llm, tools,
-                runtime_context=runtime_context,
-            )
-            git_ref = ""
-        else:
-            # Backward compat: use old _stage_interaction_and_publication
-            result, git_ref = _stage_interaction_and_publication(
-                job_id, context, workspace, config, spec, gateway, tools, llm,
-                base_sha=base_sha,
-                role_params=role_params,
-                runtime_context=runtime_context,
-            )
+        result = run_interaction_loop(
+            job_id, context, workspace, llm, tools,
+            runtime_context=runtime_context,
+        )
+        git_ref = ""  # Will be set by capability finalize if needed
         
-        # ADR-0016: Stage 4 - Capability finalize
-        if needs:
-            for cap_name in needs:
-                cap = get_capability(cap_name)
-                if cap:
-                    try:
-                        finalize_result = cap.finalize(cap_ctx)
-                        for evt in finalize_result.events:
-                            gateway.emit_data(evt)
-                        if not finalize_result.success:
-                            all_success = False
-                            logger.warning(f"Capability {cap_name} finalize returned success=False")
-                    except Exception as e:
-                        logger.error(f"Capability {cap_name} finalize failed: {e}")
-                        gateway.emit(
-                            RuntimeIssueData(
-                                stage="finalize",
-                                fatal=True,
-                                code=f"{cap_name}_finalize_failed",
-                                error=str(e),
-                            )
-                        )
+        # ADR-0018: Stage 4 - Capability finalize (unified for all jobs)
+        # Empty needs means no capability finalize, job success from interaction
+        for cap_name in needs:
+            cap = get_capability(cap_name)
+            if cap:
+                try:
+                    finalize_result = cap.finalize(cap_ctx)
+                    for evt in finalize_result.events:
+                        gateway.emit_data(evt)
+                    if not finalize_result.success:
                         all_success = False
-            # git_ref from capability finalize (e.g., GitWorkspaceCapability)
-        else:
-            # Backward compat: no needs, old behavior
-            # git_ref is data field, not success indicator
-            # _stage_interaction_and_publication handles guardrail retry
-            all_success = True  # Old path: always complete (exceptions handled above)
+                        logger.warning(f"Capability {cap_name} finalize returned success=False")
+                    # Extract git_ref from finalize events if present
+                    for evt in finalize_result.events:
+                        if evt.type == "artifact.published" and "ref" in evt.data:
+                            git_ref = evt.data.get("ref", "")
+                except Exception as e:
+                    logger.error(f"Capability {cap_name} finalize failed: {e}")
+                    gateway.emit(
+                        RuntimeIssueData(
+                            stage="finalize",
+                            fatal=True,
+                            code=f"{cap_name}_finalize_failed",
+                            error=str(e),
+                        )
+                    )
+                    all_success = False
 
         # Emit completion
         if all_success:
@@ -370,8 +353,8 @@ def _run_job_from_spec(
     finally:
         if 'runtime_context' in locals():
             runtime_context.cleanup()
-        if workspace and not needs:  # Old cleanup for backward compat path
-            finalize_workspace_after_job(workspace, gateway=gateway)
+        # ADR-0018: Cleanup is handled by CleanupCapability, not legacy finalize
+        # Workspace cleanup is ephemeral per ADR-0015, handled by Trenni
         gateway.close()
 
 
@@ -497,6 +480,112 @@ def _stage_interaction_and_publication(
                 "and stop calling tools when the job is actually done."
             )
             continue
+
+
+# ---------------------------------------------------------------------------
+# Blocked roles legacy path (temporary until ADR-0019)
+# ---------------------------------------------------------------------------
+
+def _run_blocked_role_legacy_path(
+    config: JobConfig,
+    spec: JobSpec,
+    evo_path: Path,
+    gateway: EventGateway,
+    runtime_context: RuntimeContext,
+    cap_ctx: JobContext,
+    *,
+    bundle_workspace: str = "",
+    target_workspace: str = "",
+    role_params: dict[str, object],
+    llm: UnifiedLLMGateway,
+    cost_tracking_degraded: bool,
+) -> None:
+    """Execute legacy path for blocked roles pending ADR-0019.
+    
+    This path uses preparation_fn and _stage_interaction_and_publication.
+    It is only used for roles in BLOCKED_ROLES_PENDING_ADR_0019.
+    Will be removed after ADR-0019 authority split is resolved.
+    """
+    job_id = config.job_id
+    workspace: str | None = None
+    all_success = True
+    
+    # Legacy preparation
+    branch_prefix = str(
+        role_params.get("branch_prefix")
+        or getattr(spec.publication_fn, "__publication_branch_prefix__", config.publication.branch_prefix)
+    )
+    prep_params = {
+        "goal": config.goal,
+        "repo": config.workspace.repo,
+        "init_branch": config.workspace.init_branch,
+        **role_params,
+    }
+    prep_sig = inspect.signature(spec.preparation_fn)
+    if "runtime_context" in prep_sig.parameters:
+        prep_params["runtime_context"] = runtime_context
+    if "evo_root" in prep_sig.parameters:
+        prep_params["evo_root"] = str(evo_path)
+    workspace_cfg = spec.preparation_fn(**prep_params)
+    workspace = setup_workspace(
+        job_id,
+        workspace_cfg,
+        branch_prefix,
+        task_id=config.task_id or job_id,
+        goal=config.goal,
+        gateway=gateway,
+        cost_tracking_degraded=cost_tracking_degraded,
+    )
+    
+    runtime_context.workspace_path = workspace
+    
+    # Capture base SHA
+    try:
+        base_sha = git.Repo(workspace).head.commit.hexsha
+    except Exception:
+        base_sha = ""
+    
+    # Context
+    context_spec = spec.context_fn(
+        workspace=workspace,
+        job_id=job_id,
+        goal=config.goal,
+        job_config=config,
+        evo_root=str(evo_path),
+        **role_params,
+    )
+    context = build_context(
+        job_id, workspace, config.goal, context_spec, config, gateway, bundle_workspace=Path(bundle_workspace),
+    )
+    
+    # Interaction + Publication (legacy)
+    bundle_sha = config.bundle_source.resolved_ref if config.bundle_source else ""
+    tools = _setup_tools(config, spec, Path(bundle_workspace), bundle_sha, gateway)
+    result, git_ref = _stage_interaction_and_publication(
+        job_id, context, workspace, config, spec, gateway, tools, llm,
+        base_sha=base_sha,
+        role_params=role_params,
+        runtime_context=runtime_context,
+    )
+    
+    # Emit completion (legacy path always succeeds if it reaches here)
+    gateway.emit(
+        JobCompletedData(
+            git_ref=git_ref or "",
+            summary=result.get("summary", ""),
+            status=str(result.get("status", "complete") or "complete"),
+            code=str(result.get("code", "") or ""),
+            budget_dim=str(result.get("budget_dim", "") or ""),
+            cost_tracking_degraded=cost_tracking_degraded,
+            cost=llm.total_cost,
+            artifact_bindings=result.get("artifact_bindings", []),
+        )
+    )
+    logger.info(f"Job {job_id} completed (legacy path)")
+    
+    # Cleanup
+    if workspace:
+        finalize_workspace_after_job(workspace, gateway=gateway)
 
 
 # ---------------------------------------------------------------------------

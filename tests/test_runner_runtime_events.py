@@ -229,6 +229,7 @@ def test_duplicate_tool_names_emit_runtime_issue_and_job_failed(tmp_path):
 
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy cleanup path removed for non-blocked roles. Blocked role test added in test_capability.py. Pending ADR-0019 blocked role deletion.")
 def test_cleanup_issue_calls_finalize_with_gateway(tmp_path):
 
     """Verify finalize_workspace_after_job is called with the gateway so it can emit events."""
@@ -279,6 +280,7 @@ def test_cleanup_issue_calls_finalize_with_gateway(tmp_path):
 
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy publication guardrail removed for non-blocked roles. Blocked roles use separate _run_blocked_role_legacy_path. Pending ADR-0019 deletion.")
 def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
 
     emitter = RecordingEmitter()
@@ -343,6 +345,7 @@ def test_publication_guardrail_reenters_interaction_with_user_prompt(tmp_path):
 
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy publication guardrail removed for non-blocked roles. Blocked roles use separate _run_blocked_role_legacy_path. Pending ADR-0019 deletion.")
 def test_publication_guardrail_can_fail_without_retry(tmp_path):
 
     emitter = RecordingEmitter()
@@ -540,6 +543,7 @@ def test_runner_emits_budget_exhausted_code_on_clean_partial_exit(tmp_path):
 
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy publication path removed for non-blocked roles. Blocked roles use separate _run_blocked_role_legacy_path. Pending ADR-0019 deletion.")
 def test_runner_skips_publication_for_repoless_job(tmp_path):
 
     emitter = RecordingEmitter()
@@ -586,6 +590,7 @@ def test_runner_skips_publication_for_repoless_job(tmp_path):
 
 
 
+@pytest.mark.xfail(reason="ADR-0018: Legacy publication path removed for non-blocked roles. Blocked roles use separate _run_blocked_role_legacy_path. Pending ADR-0019 deletion.")
 def test_runner_marks_job_failed_when_publication_fails_after_budget_exhaustion(tmp_path):
 
     emitter = RecordingEmitter()

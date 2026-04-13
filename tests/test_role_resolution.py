@@ -34,12 +34,10 @@ def bundle_workspace_with_roles(tmp_path: Path) -> Path:
     (roles_dir / "worker.py").write_text('''
 from palimpsest.runtime.roles import role, JobSpec, context_spec
 
-@role(name="worker", description="Factorio worker role")
+@role(name="worker", description="Factorio worker role", needs=[])
 def worker(**params):
     return JobSpec(
-        preparation_fn=lambda: None,
         context_fn=context_spec("factorio worker", []),
-        publication_fn=lambda **kw: None,
     )
 ''')
 

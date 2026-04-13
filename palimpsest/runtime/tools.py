@@ -64,7 +64,7 @@ def _function_to_schema(func: Callable) -> dict:
     required = []
 
     # Exclude injected runtime dependencies from schema
-    injected_args = {"workspace", "gateway", "evo_root", "evo_sha", "bundle_workspace", "bundle_sha", "runtime_context"}
+    injected_args = {"workspace", "gateway", "evo_root", "evo_sha", "bundle_workspace", "bundle_sha", "runtime_context", "config"}
 
     for name, param in sig.parameters.items():
         if name in injected_args:
