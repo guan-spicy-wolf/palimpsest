@@ -283,6 +283,8 @@ BUILTIN_CAPABILITIES: dict[str, Capability] = {
 }
 
 
-def get_capability(name: str) -> Capability | None:
-    """Get a capability by name from registry."""
+def get_capability(name: str, extra: dict[str, "Capability"] | None = None) -> "Capability | None":
+    """Get a capability by name. Checks extra (bundle-local) registry before builtins."""
+    if extra and name in extra:
+        return extra[name]
     return BUILTIN_CAPABILITIES.get(name)

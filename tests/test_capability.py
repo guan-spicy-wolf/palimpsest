@@ -201,7 +201,7 @@ def test_multiple_capabilities_all_called(tmp_path):
 
     patches = _base_patches(emitter, tmp_path)
     cap_map = {"git_workspace": mock_git, "slack_notify": mock_slack}
-    patches["palimpsest.runner.get_capability"] = MagicMock(side_effect=lambda n: cap_map.get(n))
+    patches["palimpsest.runner.get_capability"] = MagicMock(side_effect=lambda n, extra=None: cap_map.get(n))
 
     with _apply_patches(patches)[0]:
         _run_job_from_spec(
@@ -474,57 +474,54 @@ def test_git_workspace_capability_repoless_skips_gracefully():
 
 # === Blocked role legacy path tests (ADR-0018 Phase 3) ===
 
-def test_blocked_role_uses_legacy_path(tmp_path):
-    """Blocked roles pending ADR-0019 use _run_blocked_role_legacy_path.
-    
-    Per ADR-0018 Phase 3: factorio:worker/implementer/evaluator are blocked
-    pending ADR-0019 authority split. They continue using legacy
-    preparation_fn/publication_fn hooks via separate function.
-    
-    This test verifies:
-    1. Blocked role is recognized by BLOCKED_ROLES_PENDING_ADR_0019
-    2. Legacy path function is called (not unified lifecycle)
+def test_blocked_roles_list_is_empty(tmp_path):
+    """ADR-0019 complete: BLOCKED_ROLES_PENDING_ADR_0019 is now empty.
+
+    All factorio roles (worker, implementer, evaluator) have declared
+    output_authority and migrated to capability-only lifecycle.
     """
     from palimpsest.runtime.roles import BLOCKED_ROLES_PENDING_ADR_0019
-    from unittest.mock import patch, MagicMock
-    
-    # Verify blocked role is in registry
-    assert "factorio:worker" in BLOCKED_ROLES_PENDING_ADR_0019
-    
+    assert len(BLOCKED_ROLES_PENDING_ADR_0019) == 0
+
+
+def test_live_runtime_role_uses_bundle_workspace(tmp_path):
+    """ADR-0019: live_runtime roles get bundle_workspace as their execution workspace.
+
+    output_authority="live_runtime" tells the runner to use bundle_workspace as cwd,
+    so the agent writes directly into the live bundle directory.
+    """
+    from yoitsu_contracts.role_metadata import RoleMetadata
+
     emitter = RecordingEmitter()
-    config = JobConfig(job_id="blocked-job", task="x")
-    config.bundle = "factorio"
-    config.role = "worker"
-    
-    # Create spec with legacy hooks (as blocked roles still have)
-    spec = _spec()
-    
+    config = JobConfig(job_id="lr-job", task="write scripts")
+
+    bundle_ws = str(tmp_path / "bundle")
+    Path(bundle_ws).mkdir()
+
+    meta = RoleMetadata(name="implementer", description="test", output_authority="live_runtime")
+
+    captured_workspace = []
+
+    def capture_context(job_id, workspace, goal, context_spec, config, gateway, **kw):
+        captured_workspace.append(workspace)
+        return {}
+
     patches = _base_patches(emitter, tmp_path)
-    patches["palimpsest.runner.git.Repo"] = MagicMock()
-    patches["palimpsest.runner.setup_workspace"] = MagicMock(return_value=str(tmp_path))
-    patches["palimpsest.runner._stage_interaction_and_publication"] = MagicMock(
-        return_value=({"summary": "blocked done"}, "ref:sha")
-    )
-    patches["palimpsest.runner.finalize_workspace_after_job"] = MagicMock()
-    
+    patches["palimpsest.runner.build_context"] = capture_context
+
     stack, mocks = _apply_patches(patches)
     with stack:
         _run_job_from_spec(
-            config, spec, tmp_path,
-            bundle_workspace="",
-            target_workspace="/tmp/target",
-            needs=[],  # Blocked role may have empty needs
+            config, _spec(), tmp_path,
+            bundle_workspace=bundle_ws,
+            target_workspace="",
+            needs=[],
+            role_meta=meta,
         )
-    
-    # Verify legacy path components were called
-    mocks["palimpsest.runner.setup_workspace"].assert_called()  # Legacy prep
-    mocks["palimpsest.runner._stage_interaction_and_publication"].assert_called_once()
-    mocks["palimpsest.runner.finalize_workspace_after_job"].assert_called()
-    
-    # Verify JobCompletedData emitted (legacy path emits this)
-    completed = [e for e in emitter.events if isinstance(e, JobCompletedData)]
-    assert len(completed) == 1
-    assert completed[0].git_ref == "ref:sha"
+
+    assert captured_workspace == [bundle_ws], (
+        f"live_runtime role should use bundle_workspace as workspace, got {captured_workspace}"
+    )
 
 
 def test_non_blocked_role_rejects_legacy_hooks(tmp_path):
@@ -570,59 +567,45 @@ def test_non_blocked_role_rejects_legacy_hooks(tmp_path):
     # Our test fixtures already verify this by NOT having legacy hooks
 
 
-def test_blocked_role_real_resolve_path(tmp_path):
-    """Blocked role uses legacy path via real RoleManager.resolve().
-    
-    Per ADR-0018: This test exercises the FULL resolution path:
-    1. RoleManager(bundle_root, bundle="factorio") - bundle identity correct
-    2. resolver.resolve("worker") - produces JobSpec with legacy hooks
-    3. RoleManager validation sees "factorio:worker" in BLOCKED_ROLES_PENDING_ADR_0019
-    4. No ValueError raised - blocked role allowed to use legacy hooks
+def test_role_with_output_authority_resolves_correctly(tmp_path):
+    """ADR-0019: output_authority declared in @role is accessible via RoleManager.
+
+    RoleMetadataReader extracts output_authority from the @role decorator.
+    RoleManager.resolve() produces a spec without legacy hooks.
     """
-    import tempfile
     import textwrap
-    
-    # Create a test bundle with blocked role definition
-    with tempfile.TemporaryDirectory() as td:
-        bundle_root = Path(td)
-        # bundle_root IS the bundle workspace, roles are at bundle_root/roles/
-        roles_dir = bundle_root / "roles"
-        roles_dir.mkdir(parents=True)
-        
-        # Create blocked role with legacy hooks
-        (roles_dir / "worker.py").write_text(textwrap.dedent('''
-            from palimpsest.runtime.roles import role, JobSpec, context_spec
-            from palimpsest.config import WorkspaceConfig
-            
-            def prep(**kw):
-                return WorkspaceConfig(repo="", new_branch=False)
-            
-            def pub(**kw):
-                return None, []
-            pub.__publication_strategy__ = "skip"
-            
-            @role(name="worker", description="test blocked worker")
-            def worker(**p):
-                return JobSpec(
-                    preparation_fn=prep,
-                    context_fn=context_spec("test", []),
-                    publication_fn=pub,
-                    tools=["bash"],
-                )
-        '''))
-        
-        # Key: pass bundle="factorio" to RoleManager
-        # This is how runner.py calls it: RoleManager(evo_path, bundle=config.bundle)
-        manager = RoleManager(bundle_root, bundle="factorio")
-        
-        # This should NOT raise ValueError - blocked role allowed
-        spec = manager.resolve("worker")
-        
-        # Verify: spec has legacy hooks (blocked roles still use them)
-        assert spec.preparation_fn is not None
-        assert spec.publication_fn is not None
-        assert spec.source_role == "worker"
-        assert "bash" in spec.tools
+
+    bundle_root = tmp_path
+    roles_dir = bundle_root / "roles"
+    roles_dir.mkdir(parents=True)
+
+    (roles_dir / "implementer.py").write_text(textwrap.dedent('''
+        from palimpsest.runtime.roles import role, JobSpec, context_spec
+
+        @role(
+            name="implementer",
+            description="test live runtime implementer",
+            needs=[],
+            output_authority="live_runtime",
+        )
+        def implementer(**p):
+            return JobSpec(
+                context_fn=context_spec("test", []),
+                tools=["bash"],
+            )
+    '''))
+
+    manager = RoleManager(bundle_root, bundle="mybundle")
+
+    # resolve() should succeed — no legacy hooks, capability-only
+    spec = manager.resolve("implementer")
+    assert spec.preparation_fn is None
+    assert spec.publication_fn is None
+
+    # output_authority is readable from metadata
+    meta = manager.get_definition("implementer")
+    assert meta is not None
+    assert meta.output_authority == "live_runtime"
 
 
 def test_empty_needs_has_execution_workspace(tmp_path):

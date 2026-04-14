@@ -200,27 +200,16 @@ def _run_job_from_spec(
     try:
         role_params = dict(config.role_params or {})
         
-        # ADR-0018 Phase 3: Check if role is blocked pending ADR-0019
-        # Blocked roles use legacy path, others use unified lifecycle
-        role_key = f"{config.bundle}:{config.role}"
-        is_blocked = role_key in BLOCKED_ROLES_PENDING_ADR_0019
-        
-        if is_blocked:
-            # Blocked role: use legacy path (temporary until ADR-0019)
-            return _run_blocked_role_legacy_path(
-                config, spec, evo_path, gateway, runtime_context, cap_ctx,
-                bundle_workspace=bundle_workspace,
-                target_workspace=target_workspace,
-                role_params=role_params,
-                llm=llm,
-                cost_tracking_degraded=cost_tracking_degraded,
-            )
-        
-        # Non-blocked role: unified lifecycle (ADR-0018)
+        # ADR-0019: Load bundle-provided capabilities (e.g. factorio_runtime)
+        bundle_capabilities = _load_bundle_capabilities(bundle_workspace)
+
+        # ADR-0019: Get output_authority from role metadata
+        output_authority = role_meta.output_authority if role_meta else ""
+
         # ADR-0018: Stage 1 - Capability setup (unified for all jobs)
         # Empty needs means no capability setup, but still unified lifecycle
         for cap_name in needs:
-            cap = get_capability(cap_name)
+            cap = get_capability(cap_name, extra=bundle_capabilities)
             if cap:
                 try:
                     events = cap.setup(cap_ctx)
@@ -241,21 +230,25 @@ def _run_job_from_spec(
                         code="capability_setup",
                     )
         
-        # ADR-0018 Contract: Every job has an execution workspace.
-        # - For needs=['git_workspace']: workspace = target_workspace (Trenni prepared)
-        # - For needs=[]: workspace = ephemeral execution directory
-        # - Tools that require cwd (bash) and context providers can rely on workspace being non-empty
-        
-        if target_workspace:
-            # Repo-authoring role: Trenni prepared workspace with git clone
+        # ADR-0019: Workspace routing by output_authority.
+        # - "repository": target_workspace (Trenni-prepared git clone)
+        # - "live_runtime": bundle_workspace (role writes directly into live bundle)
+        # - "analysis" or "": ephemeral temp dir (read-only, no persistent output)
+        if output_authority == "repository" or target_workspace:
+            # Repository-authoring role: Trenni prepared workspace with git clone
             workspace = target_workspace
             _ephemeral_workspace = False
+        elif output_authority == "live_runtime":
+            # Live-runtime role: use bundle_workspace as cwd (direct bundle modification)
+            workspace = bundle_workspace
+            _ephemeral_workspace = False
+            logger.info(f"Live-runtime role using bundle_workspace as workspace: {workspace}")
         else:
-            # Analysis-only role: create ephemeral execution workspace
+            # Analysis role: ephemeral execution workspace (read-only, cwd is irrelevant)
             import tempfile
             workspace = tempfile.mkdtemp(prefix="palimpsest-exec-")
             _ephemeral_workspace = True
-            logger.info(f"Created execution workspace for analysis role: {workspace}")
+            logger.info(f"Analysis role using ephemeral workspace: {workspace}")
         
         # ADR-0011: set workspace_path after workspace setup
         runtime_context.workspace_path = workspace
@@ -288,11 +281,12 @@ def _run_job_from_spec(
             runtime_context=runtime_context,
         )
         git_ref = ""  # Will be set by capability finalize if needed
-        
+        finalize_layers: list[dict] = []  # ADR-0020: per-capability finalize evidence
+
         # ADR-0018: Stage 4 - Capability finalize (unified for all jobs)
         # Empty needs means no capability finalize, job success from interaction
         for cap_name in needs:
-            cap = get_capability(cap_name)
+            cap = get_capability(cap_name, extra=bundle_capabilities)
             if cap:
                 try:
                     finalize_result = cap.finalize(cap_ctx)
@@ -305,6 +299,11 @@ def _run_job_from_spec(
                     for evt in finalize_result.events:
                         if evt.type == "artifact.published" and "ref" in evt.data:
                             git_ref = evt.data.get("ref", "")
+                    # ADR-0020: record finalize layer evidence
+                    finalize_layers.append({
+                        "capability": cap_name,
+                        "success": finalize_result.success,
+                    })
                 except Exception as e:
                     logger.error(f"Capability {cap_name} finalize failed: {e}")
                     gateway.emit(
@@ -316,6 +315,7 @@ def _run_job_from_spec(
                         )
                     )
                     all_success = False
+                    finalize_layers.append({"capability": cap_name, "success": False, "error": str(e)})
 
         # Emit completion
         if all_success:
@@ -329,6 +329,7 @@ def _run_job_from_spec(
                     cost_tracking_degraded=cost_tracking_degraded,
                     cost=llm.total_cost,
                     artifact_bindings=result.get("artifact_bindings", []),
+                    finalize_layers=finalize_layers,  # ADR-0020
                 )
             )
             logger.info(f"Job {job_id} completed")
@@ -607,6 +608,58 @@ def _run_blocked_role_legacy_path(
     # Cleanup
     if workspace:
         finalize_workspace_after_job(workspace, gateway=gateway)
+
+
+# ---------------------------------------------------------------------------
+# Bundle capability loader (ADR-0019)
+# ---------------------------------------------------------------------------
+
+def _load_bundle_capabilities(bundle_workspace: str) -> dict[str, object]:
+    """Discover and instantiate capabilities from bundle_workspace/capabilities/.
+
+    Scans *.py files in the capabilities directory, imports each, and collects
+    any class that satisfies the Capability protocol (has name, setup, finalize).
+
+    Returns:
+        dict mapping capability name to instance. Empty if no capabilities found.
+    """
+    import importlib.util
+    import inspect
+
+    caps: dict[str, object] = {}
+    caps_dir = Path(bundle_workspace) / "capabilities"
+    if not caps_dir.exists():
+        return caps
+
+    for py_path in sorted(caps_dir.glob("*.py")):
+        if py_path.name.startswith("_"):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(
+                f"bundle_cap_{py_path.stem}", py_path
+            )
+            if spec is None or spec.loader is None:
+                continue
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            for attr_name in dir(mod):
+                obj = getattr(mod, attr_name)
+                if (
+                    inspect.isclass(obj)
+                    and hasattr(obj, "name")
+                    and hasattr(obj, "setup")
+                    and hasattr(obj, "finalize")
+                    and not inspect.isabstract(obj)
+                ):
+                    instance = obj()
+                    cap_name = getattr(instance, "name", None)
+                    if cap_name and isinstance(cap_name, str):
+                        caps[cap_name] = instance
+                        logger.debug(f"Loaded bundle capability: {cap_name} from {py_path.name}")
+        except Exception as e:
+            logger.warning(f"Failed to load bundle capability from {py_path}: {e}")
+
+    return caps
 
 
 # ---------------------------------------------------------------------------

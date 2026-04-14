@@ -20,11 +20,9 @@ from yoitsu_contracts.role_metadata import RoleMetadata, RoleMetadataReader
 #
 # Example: "factorio:worker" means evo/factorio/roles/worker.py with @role(name="worker")
 #
-BLOCKED_ROLES_PENDING_ADR_0019 = {
-    "factorio:worker",
-    "factorio:implementer",
-    "factorio:evaluator",
-}
+# ADR-0019 implemented: all factorio roles have declared output_authority and migrated
+# to capability-only lifecycle. This set is intentionally empty.
+BLOCKED_ROLES_PENDING_ADR_0019: set[str] = set()
 
 
 @dataclass
@@ -182,6 +180,7 @@ def role(
     min_capability: str = "",
     needs: list[str] | None = None,  # ADR-0016: capabilities required
     contexts: list[str] | None = None,  # Context providers for LLM prompt
+    output_authority: str = "",  # ADR-0019: "repository", "live_runtime", "analysis"
 ) -> Callable[[Callable[..., JobSpec]], Callable[..., JobSpec]]:
     """Decorator for role functions.
 
@@ -206,6 +205,7 @@ def role(
             min_capability=min_capability,
             needs=needs or [],
             contexts=contexts or [],
+            output_authority=output_authority,  # ADR-0019
         )
         return func
 
