@@ -407,17 +407,25 @@ def test_backward_compat_no_needs_uses_publication_fn(tmp_path):
 
 
 # === GitWorkspaceCapability integration tests (ADR-0018 Task 5) ===
+# Per ADR-0021: GitWorkspaceCapability moved to bundle (evo/factorio/capabilities)
+# Tests now import from bundle location
 
 def test_git_workspace_capability_no_changes_skips_publication(tmp_path):
     """GitWorkspaceCapability with no changes emits publication.skipped, success=True.
-    
+
     Per ADR-0015 §2.5: no changes is a valid terminal path.
     Whether it's acceptable depends on evaluator judgment.
     """
-    from palimpsest.runtime.capability import GitWorkspaceCapability, JobContext
-    from pathlib import Path
+    # Import from bundle location per ADR-0021
+    import sys
+    evo_path = Path(__file__).parent.parent.parent / "evo" / "factorio"
+    if str(evo_path) not in sys.path:
+        sys.path.insert(0, str(evo_path))
+
+    from capabilities.git_workspace import GitWorkspaceCapability
+    from palimpsest.runtime.capability import JobContext
     import subprocess
-    
+
     # Create a git repo with no changes
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
@@ -425,7 +433,7 @@ def test_git_workspace_capability_no_changes_skips_publication(tmp_path):
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo_path, check=True, capture_output=True)
     subprocess.run(["git", "commit", "--allow-empty", "-m", "init"], cwd=repo_path, check=True, capture_output=True)
-    
+
     cap = GitWorkspaceCapability()
     ctx = JobContext(
         job_id="job-no-changes",
@@ -435,9 +443,9 @@ def test_git_workspace_capability_no_changes_skips_publication(tmp_path):
         goal="test",
         target_workspace=str(repo_path),
     )
-    
+
     result = cap.finalize(ctx)
-    
+
     # No changes should emit publication.skipped with success=True
     assert result.success is True
     assert len(result.events) == 1
@@ -447,12 +455,18 @@ def test_git_workspace_capability_no_changes_skips_publication(tmp_path):
 
 def test_git_workspace_capability_repoless_skips_gracefully():
     """GitWorkspaceCapability with empty target_workspace skips gracefully.
-    
+
     Per ADR-0018: repoless role can use needs=[] or needs=["git_workspace"]
     with empty workspace.
     """
-    from palimpsest.runtime.capability import GitWorkspaceCapability, JobContext
-    
+    import sys
+    evo_path = Path(__file__).parent.parent.parent / "evo" / "factorio"
+    if str(evo_path) not in sys.path:
+        sys.path.insert(0, str(evo_path))
+
+    from capabilities.git_workspace import GitWorkspaceCapability
+    from palimpsest.runtime.capability import JobContext
+
     cap = GitWorkspaceCapability()
     ctx = JobContext(
         job_id="job-repoless",
@@ -462,9 +476,9 @@ def test_git_workspace_capability_repoless_skips_gracefully():
         goal="analyze",
         target_workspace="",  # Empty workspace
     )
-    
+
     result = cap.finalize(ctx)
-    
+
     # Repoless should emit publication.skipped with success=True
     assert result.success is True
     assert len(result.events) == 1
@@ -472,99 +486,86 @@ def test_git_workspace_capability_repoless_skips_gracefully():
     assert result.events[0].data.get("reason") == "no_target_workspace"
 
 
-# === Blocked role legacy path tests (ADR-0018 Phase 3) ===
+# === ADR-0021: Capability-only model tests ===
 
-def test_blocked_roles_list_is_empty(tmp_path):
-    """ADR-0019 complete: BLOCKED_ROLES_PENDING_ADR_0019 is now empty.
+def test_all_roles_use_capability_only_model(tmp_path):
+    """ADR-0021: All roles use capability-only model.
 
-    All factorio roles (worker, implementer, evaluator) have declared
-    output_authority and migrated to capability-only lifecycle.
+    BLOCKED_ROLES_PENDING_ADR_0019 was deleted. RoleManager.resolve()
+    now enforces capability-only model for ALL roles.
+
+    Any role using preparation_fn/publication_fn raises ValueError.
     """
-    from palimpsest.runtime.roles import BLOCKED_ROLES_PENDING_ADR_0019
-    assert len(BLOCKED_ROLES_PENDING_ADR_0019) == 0
+    import textwrap
 
+    from palimpsest.runtime.roles import RoleManager, JobSpec, context_spec
 
-def test_live_runtime_role_uses_bundle_workspace(tmp_path):
-    """ADR-0019: live_runtime roles get bundle_workspace as their execution workspace.
+    # Create a bundle with a role that uses legacy preparation_fn
+    bundle_root = tmp_path
+    roles_dir = bundle_root / "roles"
+    roles_dir.mkdir(parents=True)
 
-    output_authority="live_runtime" tells the runner to use bundle_workspace as cwd,
-    so the agent writes directly into the live bundle directory.
-    """
-    from yoitsu_contracts.role_metadata import RoleMetadata
+    (roles_dir / "legacy_role.py").write_text(textwrap.dedent('''
+        from palimpsest.runtime.roles import role, JobSpec, context_spec, workspace_config
 
-    emitter = RecordingEmitter()
-    config = JobConfig(job_id="lr-job", task="write scripts")
-
-    bundle_ws = str(tmp_path / "bundle")
-    Path(bundle_ws).mkdir()
-
-    meta = RoleMetadata(name="implementer", description="test", output_authority="live_runtime")
-
-    captured_workspace = []
-
-    def capture_context(job_id, workspace, goal, context_spec, config, gateway, **kw):
-        captured_workspace.append(workspace)
-        return {}
-
-    patches = _base_patches(emitter, tmp_path)
-    patches["palimpsest.runner.build_context"] = capture_context
-
-    stack, mocks = _apply_patches(patches)
-    with stack:
-        _run_job_from_spec(
-            config, _spec(), tmp_path,
-            bundle_workspace=bundle_ws,
-            target_workspace="",
+        @role(
+            name="legacy_role",
+            description="role with deprecated hooks",
             needs=[],
-            role_meta=meta,
         )
+        def legacy_role(**p):
+            return JobSpec(
+                preparation_fn=workspace_config(repo="", init_branch="main"),
+                context_fn=context_spec("test", []),
+                tools=[],
+            )
+    '''))
 
-    assert captured_workspace == [bundle_ws], (
-        f"live_runtime role should use bundle_workspace as workspace, got {captured_workspace}"
-    )
+    manager = RoleManager(bundle_root, bundle="test")
+
+    # resolve() must raise ValueError for preparation_fn usage
+    with pytest.raises(ValueError, match="deprecated preparation_fn"):
+        manager.resolve("legacy_role")
 
 
 def test_non_blocked_role_rejects_legacy_hooks(tmp_path):
-    """Non-blocked roles cannot use preparation_fn/publication_fn.
-    
-    Per ADR-0018: RoleManager.resolve() enforces capability-only model
-    for non-blocked roles. Attempting to use legacy hooks raises ValueError.
+    """Per ADR-0021: ALL roles use capability-only model.
+
+    RoleManager.resolve() enforces capability-only model for ALL roles.
+    Attempting to use publication_fn raises ValueError.
+
+    BLOCKED_ROLES_PENDING_ADR_0019 was deleted; no role can use legacy hooks.
     """
+    import textwrap
+
     from palimpsest.runtime.roles import RoleManager, JobSpec, context_spec
-    from palimpsest.config import WorkspaceConfig
-    
-    # Create a non-blocked role with legacy hooks
-    def legacy_prep(**kwargs):
-        return WorkspaceConfig(repo="", new_branch=False)
-    
-    def legacy_pub(**kwargs):
-        return None, []
-    
-    # Try to resolve a role that uses legacy hooks but is NOT blocked
-    # This should raise ValueError
-    manager = RoleManager(tmp_path / "test-bundle")
-    
-    # Create a JobSpec with legacy hooks (simulating what blocked roles return)
-    spec_with_legacy = JobSpec(
-        preparation_fn=legacy_prep,
-        context_fn=context_spec("test", []),
-        publication_fn=legacy_pub,
-        tools=[],
-    )
-    spec_with_legacy.source_role = "non_blocked_role"
-    
-    # Simulate resolve validation for non-blocked role
-    # bundle_name empty means it won match any blocked role
-    role_key = ":non_blocked_role"  # No bundle prefix
-    
-    # Direct validation check (RoleManager.resolve does this)
-    from palimpsest.runtime.roles import BLOCKED_ROLES_PENDING_ADR_0019
-    is_blocked = role_key in BLOCKED_ROLES_PENDING_ADR_0019
-    assert not is_blocked  # This role is NOT blocked
-    
-    # If we tried to use this spec, RoleManager would raise:
-    # ValueError: Role ':non_blocked_role' uses deprecated preparation_fn
-    # Our test fixtures already verify this by NOT having legacy hooks
+
+    # Create a bundle with a role that uses legacy publication_fn
+    bundle_root = tmp_path
+    roles_dir = bundle_root / "roles"
+    roles_dir.mkdir(parents=True)
+
+    (roles_dir / "pub_role.py").write_text(textwrap.dedent('''
+        from palimpsest.runtime.roles import role, JobSpec, context_spec, git_publication
+
+        @role(
+            name="pub_role",
+            description="role with deprecated publication hook",
+            needs=[],
+        )
+        def pub_role(**p):
+            return JobSpec(
+                context_fn=context_spec("test", []),
+                publication_fn=git_publication(strategy="branch"),
+                tools=[],
+            )
+    '''))
+
+    manager = RoleManager(bundle_root, bundle="test")
+
+    # resolve() must raise ValueError for publication_fn usage
+    with pytest.raises(ValueError, match="deprecated publication_fn"):
+        manager.resolve("pub_role")
 
 
 def test_role_with_output_authority_resolves_correctly(tmp_path):

@@ -55,8 +55,8 @@ from palimpsest.runtime import (
     RoleManager,
     UnifiedToolGateway,
 )
-from palimpsest.runtime.capability import JobContext, get_capability, BUILTIN_CAPABILITIES
-from palimpsest.runtime.roles import BLOCKED_ROLES_PENDING_ADR_0019
+from palimpsest.runtime.capability import JobContext, get_capability, _load_bundle_capabilities
+# ADR-0021: BLOCKED_ROLES_PENDING_ADR_0019 removed - all roles use capability-only lifecycle
 from yoitsu_contracts import AnalyzerVersion, RoleMetadata
 from palimpsest.runtime.roles import JobSpec
 from palimpsest.stages import (
@@ -199,15 +199,13 @@ def _run_job_from_spec(
     
     try:
         role_params = dict(config.role_params or {})
-        
-        # ADR-0019: Load bundle-provided capabilities (e.g. factorio_runtime)
-        bundle_capabilities = _load_bundle_capabilities(bundle_workspace)
 
-        # ADR-0019: Get output_authority from role metadata
-        output_authority = role_meta.output_authority if role_meta else ""
+        # ADR-0021: Load job-side capabilities only (surface="job_side")
+        bundle_capabilities = _load_bundle_capabilities(bundle_workspace, surface_filter="job_side")
 
-        # ADR-0018: Stage 1 - Capability setup (unified for all jobs)
-        # Empty needs means no capability setup, but still unified lifecycle
+        # ADR-0018 + ADR-0021: Capability setup loop
+        # Cwd is determined by capability.workspace_ready events (ADR-0021 A.6)
+        cap_cwd = ""
         for cap_name in needs:
             cap = get_capability(cap_name, extra=bundle_capabilities)
             if cap:
@@ -215,6 +213,9 @@ def _run_job_from_spec(
                     events = cap.setup(cap_ctx)
                     for evt in events:
                         gateway.emit_data(evt)
+                        # Capture cwd from capability (ADR-0021 A.6)
+                        if evt.type == "capability.workspace_ready" and evt.data.get("cwd"):
+                            cap_cwd = evt.data["cwd"]
                 except Exception as e:
                     logger.error(f"Capability {cap_name} setup failed: {e}")
                     gateway.emit(
@@ -229,26 +230,25 @@ def _run_job_from_spec(
                         f"Capability {cap_name} setup failed: {e}",
                         code="capability_setup",
                     )
-        
-        # ADR-0019: Workspace routing by output_authority.
-        # - "repository": target_workspace (Trenni-prepared git clone)
-        # - "live_runtime": bundle_workspace (role writes directly into live bundle)
-        # - "analysis" or "": ephemeral temp dir (read-only, no persistent output)
-        if output_authority == "repository" or target_workspace:
-            # Repository-authoring role: Trenni prepared workspace with git clone
+
+        # ADR-0021 A.6: Workspace routing (capability-driven)
+        # - Capability-provided cwd > target_workspace > ephemeral
+        # - bundle_workspace-as-cwd shortcut DELETED per ADR-0021
+        # - output_authority field retained in RoleMetadata but not read by runner
+        if cap_cwd:
+            # Capability explicitly set workspace (e.g., git_workspace, bundle_workspace)
+            workspace = cap_cwd
+            _ephemeral_workspace = False
+            logger.info(f"Capability-provided workspace: {workspace}")
+        elif target_workspace:
+            # Repository-authoring role: Trenni-prepared git clone
             workspace = target_workspace
             _ephemeral_workspace = False
-        elif output_authority == "live_runtime":
-            # Live-runtime role: use bundle_workspace as cwd (direct bundle modification)
-            workspace = bundle_workspace
-            _ephemeral_workspace = False
-            logger.info(f"Live-runtime role using bundle_workspace as workspace: {workspace}")
         else:
-            # Analysis role: ephemeral execution workspace (read-only, cwd is irrelevant)
-            import tempfile
+            # No target and no capability cwd: ephemeral execution workspace
             workspace = tempfile.mkdtemp(prefix="palimpsest-exec-")
             _ephemeral_workspace = True
-            logger.info(f"Analysis role using ephemeral workspace: {workspace}")
+            logger.info(f"Using ephemeral workspace: {workspace}")
         
         # ADR-0011: set workspace_path after workspace setup
         runtime_context.workspace_path = workspace
@@ -507,160 +507,6 @@ def _stage_interaction_and_publication(
 # ---------------------------------------------------------------------------
 # Blocked roles legacy path (temporary until ADR-0019)
 # ---------------------------------------------------------------------------
-
-def _run_blocked_role_legacy_path(
-    config: JobConfig,
-    spec: JobSpec,
-    evo_path: Path,
-    gateway: EventGateway,
-    runtime_context: RuntimeContext,
-    cap_ctx: JobContext,
-    *,
-    bundle_workspace: str = "",
-    target_workspace: str = "",
-    role_params: dict[str, object],
-    llm: UnifiedLLMGateway,
-    cost_tracking_degraded: bool,
-) -> None:
-    """Execute legacy path for blocked roles pending ADR-0019.
-    
-    This path uses preparation_fn and _stage_interaction_and_publication.
-    It is only used for roles in BLOCKED_ROLES_PENDING_ADR_0019.
-    Will be removed after ADR-0019 authority split is resolved.
-    """
-    job_id = config.job_id
-    workspace: str | None = None
-    all_success = True
-    
-    # Legacy preparation
-    branch_prefix = str(
-        role_params.get("branch_prefix")
-        or getattr(spec.publication_fn, "__publication_branch_prefix__", config.publication.branch_prefix)
-    )
-    prep_params = {
-        "goal": config.goal,
-        "repo": config.workspace.repo,
-        "init_branch": config.workspace.init_branch,
-        **role_params,
-    }
-    prep_sig = inspect.signature(spec.preparation_fn)
-    if "runtime_context" in prep_sig.parameters:
-        prep_params["runtime_context"] = runtime_context
-    if "evo_root" in prep_sig.parameters:
-        prep_params["evo_root"] = str(evo_path)
-    workspace_cfg = spec.preparation_fn(**prep_params)
-    workspace = setup_workspace(
-        job_id,
-        workspace_cfg,
-        branch_prefix,
-        task_id=config.task_id or job_id,
-        goal=config.goal,
-        gateway=gateway,
-        cost_tracking_degraded=cost_tracking_degraded,
-    )
-    
-    runtime_context.workspace_path = workspace
-    
-    # Capture base SHA
-    try:
-        base_sha = git.Repo(workspace).head.commit.hexsha
-    except Exception:
-        base_sha = ""
-    
-    # Context
-    context_spec = spec.context_fn(
-        workspace=workspace,
-        job_id=job_id,
-        goal=config.goal,
-        job_config=config,
-        evo_root=str(evo_path),
-        **role_params,
-    )
-    context = build_context(
-        job_id, workspace, config.goal, context_spec, config, gateway, bundle_workspace=Path(bundle_workspace),
-    )
-    
-    # Interaction + Publication (legacy)
-    bundle_sha = config.bundle_source.resolved_ref if config.bundle_source else ""
-    tools = _setup_tools(config, spec, Path(bundle_workspace), bundle_sha, gateway)
-    result, git_ref = _stage_interaction_and_publication(
-        job_id, context, workspace, config, spec, gateway, tools, llm,
-        base_sha=base_sha,
-        role_params=role_params,
-        runtime_context=runtime_context,
-    )
-    
-    # Emit completion (legacy path always succeeds if it reaches here)
-    gateway.emit(
-        JobCompletedData(
-            git_ref=git_ref or "",
-            summary=result.get("summary", ""),
-            status=str(result.get("status", "complete") or "complete"),
-            code=str(result.get("code", "") or ""),
-            budget_dim=str(result.get("budget_dim", "") or ""),
-            cost_tracking_degraded=cost_tracking_degraded,
-            cost=llm.total_cost,
-            artifact_bindings=result.get("artifact_bindings", []),
-        )
-    )
-    logger.info(f"Job {job_id} completed (legacy path)")
-    
-    # Cleanup
-    if workspace:
-        finalize_workspace_after_job(workspace, gateway=gateway)
-
-
-# ---------------------------------------------------------------------------
-# Bundle capability loader (ADR-0019)
-# ---------------------------------------------------------------------------
-
-def _load_bundle_capabilities(bundle_workspace: str) -> dict[str, object]:
-    """Discover and instantiate capabilities from bundle_workspace/capabilities/.
-
-    Scans *.py files in the capabilities directory, imports each, and collects
-    any class that satisfies the Capability protocol (has name, setup, finalize).
-
-    Returns:
-        dict mapping capability name to instance. Empty if no capabilities found.
-    """
-    import importlib.util
-    import inspect
-
-    caps: dict[str, object] = {}
-    caps_dir = Path(bundle_workspace) / "capabilities"
-    if not caps_dir.exists():
-        return caps
-
-    for py_path in sorted(caps_dir.glob("*.py")):
-        if py_path.name.startswith("_"):
-            continue
-        try:
-            spec = importlib.util.spec_from_file_location(
-                f"bundle_cap_{py_path.stem}", py_path
-            )
-            if spec is None or spec.loader is None:
-                continue
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            for attr_name in dir(mod):
-                obj = getattr(mod, attr_name)
-                if (
-                    inspect.isclass(obj)
-                    and hasattr(obj, "name")
-                    and hasattr(obj, "setup")
-                    and hasattr(obj, "finalize")
-                    and not inspect.isabstract(obj)
-                ):
-                    instance = obj()
-                    cap_name = getattr(instance, "name", None)
-                    if cap_name and isinstance(cap_name, str):
-                        caps[cap_name] = instance
-                        logger.debug(f"Loaded bundle capability: {cap_name} from {py_path.name}")
-        except Exception as e:
-            logger.warning(f"Failed to load bundle capability from {py_path}: {e}")
-
-    return caps
-
 
 # ---------------------------------------------------------------------------
 # Timeout
