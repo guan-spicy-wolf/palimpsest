@@ -36,6 +36,11 @@ def build_context(
             potential_path = bundle_workspace / system_prompt
             if potential_path.is_file():
                 system_prompt = potential_path.read_text(encoding="utf-8")
+            else:
+                raise FileNotFoundError(
+                    f"System prompt file not found: {system_prompt!r} "
+                    f"(resolved to {potential_path})"
+                )
     sections = context_spec.get("sections", [])
     section_types = [s.get("type", "") for s in sections]
 
